@@ -1,11 +1,13 @@
 __pycache__/
 .pytest_cache/
 .venv/
+.preview_cache/
 *.pyc
 *.pyo
 *.pyd
 *.swp
 .DS_Store
+**/.DS_Store
 
 build/
 dist/

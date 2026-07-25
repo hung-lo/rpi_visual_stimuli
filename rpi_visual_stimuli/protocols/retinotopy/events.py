@@ -25,6 +25,7 @@ EVENT_TYPES = (
     "prestim_gray_on",
     "camera_start_requested",
     "camera_start_returned",
+    "raw_cache_ready",
     "prestim_baseline_start",
     "prestim_baseline_end",
     "session_start",

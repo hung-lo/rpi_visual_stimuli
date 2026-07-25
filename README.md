@@ -26,6 +26,10 @@ The repository preserves the laboratory framebuffer workflow:
 Install Python dependencies:
 
 ```bash
+# Raspberry Pi runtime environment
+python3 -m pip install -r requirements.txt
+
+# Development machine or when running pytest
 python3 -m pip install -r requirements-dev.txt
 ```
 
@@ -91,6 +95,8 @@ Both protocols support:
 - `--test`
 
 `--preview-only` validates configuration, builds previews and trial plans, and reports duration, memory, and disk estimates without touching RPG or camera hardware.
+
+If the configured persistent cache root is not writable on a development machine, preview artifacts are written under `.preview_cache/` in the repository instead.
 
 `--build-cache-only` builds and validates the persistent cache without opening the screen.
 

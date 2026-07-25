@@ -9,18 +9,38 @@ from typing import Any, Optional
 
 from ...core import baseline as baseline_core
 from ...core import camera as camera_core
-from ...core.cli import build_common_parser, prompt_float, prompt_int, prompt_text, prompt_yes_no, resolve_camera_enabled
+from ...core.cli import (
+    build_common_parser,
+    prompt_choice,
+    prompt_float,
+    prompt_int,
+    prompt_text,
+    prompt_yes_no,
+    resolve_camera_enabled,
+)
 from ...core.config import SystemConfig, load_system_config
 from ...core.event_logging import append_csv_row, write_csv
+from ...core.gpio import setup_gpio
 from ...core.gray_screen import get_baseline_gray_raw, get_timed_gray_raw
-from ...core.metadata import get_git_commit, read_source_provenance, update_session_metadata
+from ...core.metadata import (
+    collect_runtime_environment,
+    get_git_commit,
+    read_source_provenance,
+    update_session_metadata,
+)
 from ...core.preflight import check_disk_space_before_build, check_memory_before_loading
 from ...core.progress import render_progress_line
 from ...core.raw_cache import copy_manifest_to_session
 from ...core.rpg_display import display_raw_with_timing, import_rpg_or_raise, load_raws, open_screen
 from ...core.session import build_session_context, create_session_directories
 from ...core.timestamps import utc_iso_now
-from ..drifting_gratings.cache import approximate_stimulus_bytes, cache_root_for_config, ensure_cache
+from ..drifting_gratings.cache import (
+    approximate_stimulus_bytes,
+    cache_root_for_config,
+    ensure_cache,
+    ensure_preview_assets,
+    estimate_peak_build_bytes,
+)
 from ..drifting_gratings.config import (
     DEFAULT_CONTRAST,
     DEFAULT_FINAL_GRAY_SEC,
@@ -132,17 +152,71 @@ def _planned_sequence_rows(trials: list[dict[str, object]], cache_hash: str) -> 
     return rows
 
 
+def _write_preview_plan(cache_dir: Path, rows: list[dict[str, object]]) -> Path:
+    preview_dir = cache_dir / "preview"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    preview_plan_path = preview_dir / "planned_sequence_preview.csv"
+    fieldnames = list(rows[0].keys()) if rows else ["trial_index"]
+    write_csv(preview_plan_path, rows, fieldnames)
+    return preview_plan_path
+
+
+def _resolve_preview_cache_dir(repo_root: Path, cache_dir: Path) -> tuple[Path, bool]:
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir, False
+    except OSError:
+        fallback_dir = repo_root / ".preview_cache" / PROTOCOL_NAME / cache_dir.name
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        return fallback_dir, True
+
+
+def _resolve_camera_preflight(
+    system_config: SystemConfig,
+    camera_enabled: bool,
+) -> tuple[bool, Optional[camera_core.CameraCommandResult], Optional[str]]:
+    if not camera_enabled:
+        return False, None, None
+    result = camera_core.preflight_camera(system_config.camera, system_config.output_root)
+    if result.returncode == 0:
+        return True, result, None
+    print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+    if result.returncode == 3:
+        choice = prompt_choice(
+            "Camera acquisition already appears to be running on Box 152. Choose abort, stop, or no-camera",
+            choices=("abort", "stop", "no-camera"),
+            default="abort",
+        )
+        if choice == "abort":
+            raise RuntimeError("Camera preflight aborted because Box 152 is already recording.")
+        if choice == "no-camera":
+            return False, result, "continued_without_camera_after_existing_acquisition"
+        camera_core.stop_camera(system_config.camera, system_config.output_root)
+        retry = camera_core.preflight_camera(system_config.camera, system_config.output_root)
+        if retry.returncode != 0:
+            raise RuntimeError(retry.stderr or retry.stdout or "Camera preflight still failed after stopping the existing acquisition.")
+        return True, retry, "stopped_existing_acquisition_before_start"
+    if prompt_yes_no("Camera preflight failed. Continue without camera?", default_yes=False):
+        return False, result, "continued_without_camera_after_preflight_failure"
+    raise RuntimeError("Camera preflight failed.")
+
+
 def _initial_metadata(
     repo_root: Path,
+    system_config_path: Path,
     session,
     system_config: SystemConfig,
     config,
     *,
+    camera_requested: bool,
     camera_enabled: bool,
     baseline_minutes: Optional[float],
     resolved_seed: int,
     cache,
     preflight: dict[str, object],
+    runtime_environment: dict[str, object],
 ) -> dict[str, object]:
     provenance = read_source_provenance(repo_root / "docs" / "SOURCE_PROVENANCE.md")
     return {
@@ -153,9 +227,38 @@ def _initial_metadata(
         "protocol_configuration": config.to_dict(),
         "camera_state": {
             "enabled": camera_enabled,
+            "requested_enabled": camera_requested,
+            "preflight_passed": bool(camera_enabled and preflight.get("camera_preflight", {}).get("returncode") == 0),
+            "start_requested_utc": None,
+            "start_returned_utc": None,
+            "start_verified": False,
+            "remote_host": system_config.camera.host,
+            "remote_session_path": f"{system_config.camera.remote_video_root.rstrip('/')}/{session.session_id}",
+            "local_video_path": str(session.video_directory),
             "requested_baseline_minutes": baseline_minutes,
-            "stop_fetch_outcome": None,
+            "stopped": False,
+            "fetched": False,
+            "conversion_attempted": False,
+            "conversion_succeeded": False,
+            "cleanup_error": None,
+            "left_running": False,
             "manual_command_if_left_running": camera_core.manual_stop_fetch_command(repo_root),
+        },
+        "prestim": {
+            "requested_camera_baseline_sec": None if baseline_minutes is None else float(baseline_minutes) * 60.0,
+            "actual_camera_baseline_sec": None,
+            "minimum_gray_sec": config.initial_gray_sec,
+            "actual_gray_sec": None,
+            "override_used": False,
+            "end_reason": None,
+            "raw_loading_duration_sec": None,
+            "gray_retention_validated": False,
+        },
+        "gpio": {
+            "enabled": system_config.gpio.enabled,
+            "ttl_pin_bcm": system_config.gpio.ttl_pin_bcm,
+            "pulse_sec": system_config.gpio.pulse_sec,
+            "pulse_semantics": "one pulse immediately before each grating stimulus request",
         },
         "cache": {
             "cache_hash": cache.cache_hash,
@@ -175,6 +278,10 @@ def _initial_metadata(
         "repository_commit": get_git_commit(repo_root),
         "source_provenance_commit": provenance.get("vstim_natural_commit"),
         "rpg_source_reference": provenance.get("rpg_package_version"),
+        "runtime_environment": {
+            **runtime_environment,
+            "system_config_path": str(system_config_path.resolve()),
+        },
         "raw_cache_screen_compatibility_fallback": RAW_CACHE_SCREEN_COMPATIBILITY_FALLBACK,
         "timing_note": (
             "The request timestamp is the Raspberry Pi software request immediately before "
@@ -193,11 +300,14 @@ def _playback_trials(
     loaded_gray,
     *,
     event_log_path: Path,
+    gpio_controller=None,
 ) -> None:
     start_monotonic = time.monotonic()
     total_trials = len(trials)
     for index, trial in enumerate(trials, start=1):
         stim_raw = loaded_stimuli[trial["grating_raw_key"]]
+        if gpio_controller is not None:
+            gpio_controller.pulse()
         stim_timing = display_raw_with_timing(screen, stim_raw)
         append_csv_row(
             event_log_path,
@@ -254,12 +364,43 @@ def _playback_trials(
         )
 
 
+def _serialize_camera_command_result(result: Optional[camera_core.CameraCommandResult]) -> Optional[dict[str, object]]:
+    if result is None:
+        return None
+    return {
+        "command": list(result.command),
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+
+
+def _serialize_camera_cleanup_result(result: Optional[camera_core.CameraCleanupResult]) -> Optional[dict[str, object]]:
+    if result is None:
+        return None
+    return {
+        "stop_requested": result.stop_result is not None,
+        "stop_succeeded": bool(result.stop_result and result.stop_result.succeeded),
+        "fetch_requested": result.fetch_result is not None,
+        "fetch_succeeded": bool(result.fetch_result and result.fetch_result.succeeded),
+        "conversion_attempted": result.convert_result is not None,
+        "conversion_succeeded": bool(result.convert_result and result.convert_result.succeeded),
+        "left_running": result.left_running,
+        "cleanup_error": result.cleanup_error,
+        "stop_result": _serialize_camera_command_result(result.stop_result),
+        "fetch_result": _serialize_camera_command_result(result.fetch_result),
+        "convert_result": _serialize_camera_command_result(result.convert_result),
+    }
+
+
 def run(args: argparse.Namespace) -> int:
     repo_root = Path(__file__).resolve().parents[3]
-    system_config = load_system_config(args.system_config)
+    system_config_path = Path(args.system_config)
+    system_config = load_system_config(system_config_path)
     mouse_id_raw = prompt_text("Mouse ID: ")
     session_notes = prompt_text("Session notes, optional: ")
-    camera_enabled = False if args.preview_only or args.build_cache_only else resolve_camera_enabled(args)
+    camera_requested = False if args.preview_only or args.build_cache_only else resolve_camera_enabled(args)
+    camera_enabled = camera_requested
     baseline_minutes = None
     if camera_enabled:
         baseline_minutes = prompt_float(
@@ -269,17 +410,27 @@ def run(args: argparse.Namespace) -> int:
     config, _ = _prompt_protocol_config(system_config, test_mode=args.test)
     trials, resolved_seed = build_trial_sequence(system_config, config)
     iti_frame_counts = {int(trial["iti_frames"]) for trial in trials}
+    planned_cache_dir = cache_root_for_config(system_config, config)
+    planned_rows = _planned_sequence_rows(trials, planned_cache_dir.name)
     _print_summary(system_config, config, trials, camera_enabled, baseline_minutes)
-    if not args.preview_only and not args.build_cache_only:
-        if not prompt_yes_no("Start this session", default_yes=True):
-            print("Session aborted before starting. No files were changed.")
-            return 0
 
     estimated_disk_bytes = approximate_stimulus_bytes(system_config, config)
     if args.preview_only:
+        preview_cache_dir, using_fallback = _resolve_preview_cache_dir(repo_root, planned_cache_dir)
+        preview_paths, contact_sheet_path = ensure_preview_assets(
+            system_config,
+            config,
+            cache_dir=preview_cache_dir,
+        )
+        preview_plan_path = _write_preview_plan(preview_cache_dir, planned_rows)
         print()
         print("Preview-only mode:")
-        print(f"  Planned cache directory: {cache_root_for_config(system_config, config)}")
+        print(f"  Planned cache directory: {planned_cache_dir}")
+        if using_fallback:
+            print(f"  Preview cache directory: {preview_cache_dir}")
+        print(f"  Preview plan: {preview_plan_path}")
+        print(f"  Contact sheet: {contact_sheet_path}")
+        print(f"  Preview images: {len(preview_paths)}")
         print(f"  Estimated converted stimulus bytes: {estimated_disk_bytes}")
         print(f"  Planned trials: {len(trials)}")
         return 0
@@ -287,13 +438,41 @@ def run(args: argparse.Namespace) -> int:
     if args.dry_run:
         print()
         print("Dry-run mode:")
-        print(f"  Would build cache at: {cache_root_for_config(system_config, config)}")
+        print(f"  Would build cache at: {planned_cache_dir}")
         print(f"  Would run {len(trials)} drifting-grating trials")
         if camera_enabled:
             print(f"  Would start synchronous camera recording with baseline {baseline_minutes} minutes")
         return 0
 
+    camera_preflight_result = None
+    camera_preflight_note = None
+    if camera_enabled and not args.build_cache_only:
+        camera_enabled, camera_preflight_result, camera_preflight_note = _resolve_camera_preflight(
+            system_config,
+            camera_enabled,
+        )
+        if camera_preflight_note:
+            print(f"Camera mode update: {camera_preflight_note}")
+            if not camera_enabled:
+                baseline_minutes = None
+        _print_summary(system_config, config, trials, camera_enabled, baseline_minutes)
+
+    if not args.build_cache_only:
+        if not prompt_yes_no("Start this session", default_yes=True):
+            print("Session aborted before starting. No files were changed.")
+            return 0
+
     rpg = import_rpg_or_raise()
+    peak_build_bytes = estimate_peak_build_bytes(
+        system_config,
+        config,
+        iti_frame_counts=iti_frame_counts,
+    )
+    check_disk_space_before_build(
+        cache_root_for_config(system_config, config),
+        required_bytes=peak_build_bytes,
+        margin_bytes=1024 * 1024 * 1024,
+    )
     cache = ensure_cache(
         system_config,
         config,
@@ -312,7 +491,6 @@ def run(args: argparse.Namespace) -> int:
         safety_margin_bytes=512 * 1024 * 1024,
         suggestion="Reduce orientations, shorten stimulus duration, or preload fewer raw files.",
     )
-    check_disk_space_before_build(cache.cache_dir, required_bytes=estimated_disk_bytes, margin_bytes=1024 * 1024 * 1024)
     session = build_session_context(PROTOCOL_NAME, mouse_id_raw, session_notes, system_config.output_root)
     create_session_directories(session)
     planned_rows = _planned_sequence_rows(trials, cache.cache_hash)
@@ -324,22 +502,48 @@ def run(args: argparse.Namespace) -> int:
     copy_manifest_to_session(cache.cache_dir, session.session_manifest_path)
     initial_metadata = _initial_metadata(
         repo_root,
+        system_config_path,
         session,
         system_config,
         config,
+        camera_requested=camera_requested,
         camera_enabled=camera_enabled,
         baseline_minutes=baseline_minutes,
         resolved_seed=resolved_seed,
         cache=cache,
-        preflight={"memory": memory_check.to_dict()},
+        preflight={
+            "memory": memory_check.to_dict(),
+            "disk_peak_required_bytes": peak_build_bytes,
+            "camera_preflight": _serialize_camera_command_result(camera_preflight_result),
+            "camera_preflight_note": camera_preflight_note,
+        },
+        runtime_environment=collect_runtime_environment(
+            repo_root,
+            system_config_path,
+            rpg_module=rpg,
+        ),
     )
     update_session_metadata(session.metadata_path, initial_metadata)
 
-    loaded_screen = None
     camera_started = False
     baseline_monitor = None
     current_stage = "initializing"
     session_completed = False
+    failure_stage = None
+    failure_summary = None
+    cleanup_stage = None
+    cleanup_error = None
+    keyboard_interrupt = False
+    stored_exception = None
+    session_end_logged = False
+    camera_cleanup_result = None
+    camera_start_requested_utc = None
+    camera_start_returned_utc = None
+    camera_start_verified = False
+    baseline_result = None
+    raw_loading_duration_sec = None
+    camera_left_running = False
+    gpio_controller = None
     try:
         baseline_gray = get_baseline_gray_raw(
             cache.cache_dir / "gray",
@@ -363,15 +567,15 @@ def run(args: argparse.Namespace) -> int:
             convert_raw_fn=rpg.convert_raw,
         )
         with open_screen(system_config) as screen:
-            loaded_screen = screen
-            current_stage = "loading_raws"
-            loaded_stimuli = load_raws(screen, cache.stimulus_paths)
-            loaded_gray = load_raws(screen, {str(key): path for key, path in cache.gray_paths.items()})
-            loaded_gray[int(initial_gray_frames)] = screen.load_raw(str(initial_gray.path))
-            loaded_gray[int(final_gray_frames)] = screen.load_raw(str(final_gray.path))
-            loaded_baseline = screen.load_raw(str(baseline_gray.path))
-            current_stage = "displaying_prestim_gray"
+            loaded_stimuli = {}
+            loaded_gray = {}
+            gpio_controller = setup_gpio(system_config.gpio)
+            if gpio_controller is not None:
+                gpio_controller.drive_low()
             if camera_enabled:
+                current_stage = "loading_baseline_gray"
+                loaded_baseline = screen.load_raw(str(baseline_gray.path))
+                current_stage = "displaying_prestim_gray"
                 prestim_timing = display_raw_with_timing(screen, loaded_baseline)
                 gray_start_monotonic = time.monotonic()
                 append_csv_row(
@@ -385,14 +589,57 @@ def run(args: argparse.Namespace) -> int:
                     },
                     EVENT_FIELDS,
                 )
-                append_csv_row(session.event_log_path, {"event_type": "camera_start_requested", "cache_hash": cache.cache_hash}, EVENT_FIELDS)
+                camera_start_requested_utc = utc_iso_now()
+                append_csv_row(
+                    session.event_log_path,
+                    {
+                        "event_type": "camera_start_requested",
+                        "cache_hash": cache.cache_hash,
+                        "notes": camera_start_requested_utc,
+                    },
+                    EVENT_FIELDS,
+                )
                 current_stage = "starting_camera"
-                camera_core.start_camera(session.mouse_id, session.session_id)
+                camera_core.start_camera(
+                    session.mouse_id,
+                    session.session_id,
+                    system_config.camera,
+                    system_config.output_root,
+                )
                 camera_started = True
+                camera_start_verified = True
+                camera_start_returned_utc = utc_iso_now()
                 baseline_start_monotonic = time.monotonic()
-                append_csv_row(session.event_log_path, {"event_type": "camera_start_returned", "cache_hash": cache.cache_hash}, EVENT_FIELDS)
-                append_csv_row(session.event_log_path, {"event_type": "prestim_baseline_start", "cache_hash": cache.cache_hash}, EVENT_FIELDS)
+                append_csv_row(
+                    session.event_log_path,
+                    {
+                        "event_type": "camera_start_returned",
+                        "cache_hash": cache.cache_hash,
+                        "notes": camera_start_returned_utc,
+                    },
+                    EVENT_FIELDS,
+                )
+                append_csv_row(
+                    session.event_log_path,
+                    {"event_type": "prestim_baseline_start", "cache_hash": cache.cache_hash},
+                    EVENT_FIELDS,
+                )
                 baseline_monitor = baseline_core.start_early_start_monitor(enabled=True)
+                current_stage = "loading_raws"
+                raw_load_start = time.monotonic()
+                loaded_stimuli = load_raws(screen, cache.stimulus_paths)
+                loaded_gray = {key: screen.load_raw(str(path)) for key, path in cache.gray_paths.items()}
+                loaded_gray[int(final_gray_frames)] = screen.load_raw(str(final_gray.path))
+                raw_loading_duration_sec = time.monotonic() - raw_load_start
+                append_csv_row(
+                    session.event_log_path,
+                    {
+                        "event_type": "raw_cache_ready",
+                        "cache_hash": cache.cache_hash,
+                        "notes": f"raw_loading_duration_sec={raw_loading_duration_sec:.6f}",
+                    },
+                    EVENT_FIELDS,
+                )
                 current_stage = "waiting_for_baseline"
                 baseline_result = baseline_core.wait_for_prestimulus_gate(
                     requested_baseline_seconds=float(baseline_minutes or 0.0) * 60.0,
@@ -411,6 +658,23 @@ def run(args: argparse.Namespace) -> int:
                     EVENT_FIELDS,
                 )
             else:
+                current_stage = "loading_raws"
+                raw_load_start = time.monotonic()
+                loaded_stimuli = load_raws(screen, cache.stimulus_paths)
+                loaded_gray = {key: screen.load_raw(str(path)) for key, path in cache.gray_paths.items()}
+                loaded_gray[int(initial_gray_frames)] = screen.load_raw(str(initial_gray.path))
+                loaded_gray[int(final_gray_frames)] = screen.load_raw(str(final_gray.path))
+                raw_loading_duration_sec = time.monotonic() - raw_load_start
+                append_csv_row(
+                    session.event_log_path,
+                    {
+                        "event_type": "raw_cache_ready",
+                        "cache_hash": cache.cache_hash,
+                        "notes": f"raw_loading_duration_sec={raw_loading_duration_sec:.6f}",
+                    },
+                    EVENT_FIELDS,
+                )
+                current_stage = "displaying_prestim_gray"
                 prestim_timing = display_raw_with_timing(screen, loaded_gray[int(initial_gray_frames)])
                 append_csv_row(
                     session.event_log_path,
@@ -423,7 +687,17 @@ def run(args: argparse.Namespace) -> int:
                     },
                     EVENT_FIELDS,
                 )
-            append_csv_row(session.event_log_path, {"event_type": "raw_cache_ready", "cache_hash": cache.cache_hash}, EVENT_FIELDS)
+                baseline_result = baseline_core.BaselineResult(
+                    requested_baseline_seconds=0.0,
+                    actual_camera_baseline_seconds=0.0,
+                    minimum_gray_seconds=config.initial_gray_sec,
+                    actual_gray_seconds=config.initial_gray_sec,
+                    override_used=False,
+                    end_reason="timer_elapsed",
+                    baseline_remaining_at_gate_entry=0.0,
+                    gray_remaining_at_gate_entry=0.0,
+                    waited_for_minimum_gray_after_override=False,
+                )
             append_csv_row(session.event_log_path, {"event_type": "session_start", "cache_hash": cache.cache_hash}, EVENT_FIELDS)
             current_stage = "playback"
             _playback_trials(
@@ -434,6 +708,7 @@ def run(args: argparse.Namespace) -> int:
                 loaded_stimuli,
                 {int(key): value for key, value in loaded_gray.items()},
                 event_log_path=session.event_log_path,
+                gpio_controller=gpio_controller,
             )
             current_stage = "final_gray"
             final_timing = display_raw_with_timing(screen, loaded_gray[int(final_gray_frames)])
@@ -450,53 +725,96 @@ def run(args: argparse.Namespace) -> int:
             )
             append_csv_row(session.event_log_path, {"event_type": "session_end", "cache_hash": cache.cache_hash}, EVENT_FIELDS)
             session_completed = True
+            session_end_logged = True
     except KeyboardInterrupt:
-        raise
+        keyboard_interrupt = True
+        failure_stage = current_stage
+        failure_summary = "KeyboardInterrupt"
+        if session.event_log_path.exists() and not session_end_logged:
+            append_csv_row(
+                session.event_log_path,
+                {"event_type": "session_end", "notes": "keyboard_interrupt"},
+                EVENT_FIELDS,
+            )
+            session_end_logged = True
     except Exception as exc:
-        if session.event_log_path.exists():
+        stored_exception = exc
+        failure_stage = current_stage
+        failure_summary = f"{type(exc).__name__}: {exc}"
+        if session.event_log_path.exists() and not session_end_logged:
             append_csv_row(
                 session.event_log_path,
                 {"event_type": "session_end", "notes": f"{type(exc).__name__}: {exc}"},
                 EVENT_FIELDS,
             )
-        update_session_metadata(
-            session.metadata_path,
-            session_completed=False,
-            failure_stage=current_stage,
-            failure_summary=f"{type(exc).__name__}: {exc}",
-            session_stage=current_stage,
-            end_utc=utc_iso_now(),
-        )
-        raise
+            session_end_logged = True
     finally:
         baseline_core.stop_early_start_monitor(baseline_monitor)
-        current_stage = "camera_cleanup"
-        camera_cleanup = None
+        cleanup_stage = "gpio_cleanup"
+        if gpio_controller is not None:
+            try:
+                gpio_controller.drive_low()
+                gpio_controller.cleanup()
+            except Exception as exc:
+                cleanup_error = f"{type(exc).__name__}: {exc}"
+        cleanup_stage = "camera_cleanup"
         if camera_started:
             if prompt_yes_no("Stop camera recording and fetch files now?", default_yes=False):
                 time.sleep(CAMERA_SETTLING_SEC)
-                camera_cleanup = camera_core.stop_and_fetch_camera()
+                camera_cleanup_result = camera_core.stop_and_fetch_camera(
+                    system_config.camera,
+                    system_config.output_root,
+                )
+                if camera_cleanup_result.cleanup_error and cleanup_error is None:
+                    cleanup_error = camera_cleanup_result.cleanup_error
             else:
+                camera_left_running = True
+                camera_cleanup_result = camera_core.CameraCleanupResult(
+                    stop_result=None,
+                    fetch_result=None,
+                    convert_result=None,
+                    left_running=True,
+                )
                 print("Camera left running. Manual cleanup:")
                 print(camera_core.manual_stop_fetch_command(repo_root))
         update_session_metadata(
             session.metadata_path,
             session_completed=session_completed,
             session_stage="complete" if session_completed else current_stage,
-            failure_stage=None if session_completed else current_stage,
+            failure_stage=None if session_completed else failure_stage,
+            failure_summary=None if session_completed else failure_summary,
+            cleanup_stage=cleanup_stage,
+            cleanup_error=cleanup_error,
             end_utc=utc_iso_now(),
             camera_state={
                 **initial_metadata["camera_state"],
                 "enabled": camera_enabled,
-                "stop_fetch_outcome": None
-                if camera_cleanup is None
-                else {
-                    "returncode": camera_cleanup.returncode,
-                    "stdout": camera_cleanup.stdout,
-                    "stderr": camera_cleanup.stderr,
-                },
+                "start_requested_utc": camera_start_requested_utc,
+                "start_returned_utc": camera_start_returned_utc,
+                "start_verified": camera_start_verified,
+                "stopped": bool(camera_cleanup_result and camera_cleanup_result.stop_result and camera_cleanup_result.stop_result.succeeded),
+                "fetched": bool(camera_cleanup_result and camera_cleanup_result.fetch_result and camera_cleanup_result.fetch_result.succeeded),
+                "conversion_attempted": bool(camera_cleanup_result and camera_cleanup_result.convert_result is not None),
+                "conversion_succeeded": bool(camera_cleanup_result and camera_cleanup_result.convert_result and camera_cleanup_result.convert_result.succeeded),
+                "cleanup_error": cleanup_error,
+                "left_running": camera_left_running,
+                "cleanup_result": _serialize_camera_cleanup_result(camera_cleanup_result),
+            },
+            prestim={
+                **initial_metadata["prestim"],
+                "actual_camera_baseline_sec": None if baseline_result is None else baseline_result.actual_camera_baseline_seconds,
+                "actual_gray_sec": None if baseline_result is None else baseline_result.actual_gray_seconds,
+                "override_used": False if baseline_result is None else baseline_result.override_used,
+                "end_reason": None if baseline_result is None else baseline_result.end_reason,
+                "raw_loading_duration_sec": raw_loading_duration_sec,
             },
         )
+    if stored_exception is not None:
+        raise stored_exception
+    if keyboard_interrupt:
+        return 130
+    if cleanup_error is not None:
+        raise RuntimeError(cleanup_error)
     return 0
 
 

@@ -60,6 +60,30 @@ def prompt_float(prompt: str, *, default: float, input_fn: InputFn = input) -> f
     return float(response)
 
 
+def prompt_choice(
+    prompt: str,
+    *,
+    choices: tuple[str, ...],
+    default: Optional[str] = None,
+    input_fn: InputFn = input,
+) -> str:
+    normalized = tuple(choice.strip().lower() for choice in choices)
+    if default is not None and default.lower() not in normalized:
+        raise ValueError("default must be one of the provided choices")
+    hint = "/".join(
+        choice.upper() if default is not None and choice == default.lower() else choice
+        for choice in normalized
+    )
+    response = input_fn(f"{prompt} [{hint}]: ").strip().lower()
+    if not response:
+        if default is None:
+            raise ValueError("a choice is required")
+        return default.lower()
+    if response not in normalized:
+        raise ValueError(f"please choose one of: {', '.join(normalized)}")
+    return response
+
+
 def resolve_camera_enabled(args: argparse.Namespace, *, input_fn: InputFn = input) -> bool:
     if args.camera:
         return True

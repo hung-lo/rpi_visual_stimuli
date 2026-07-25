@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+import select
 import threading
 import time
-from typing import Callable, Optional
-
-
-InputFn = Callable[[str], str]
+import sys
+from typing import Callable, IO, Optional
 
 
 @dataclass
@@ -14,6 +14,8 @@ class EarlyStartMonitor:
     override_event: threading.Event
     stop_event: threading.Event
     thread: Optional[threading.Thread]
+    enabled: bool
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -44,32 +46,85 @@ class BaselineResult:
 
 def start_early_start_monitor(
     *,
-    input_fn: InputFn = input,
-    prompt: str = "Press Enter to start early once minimum gray is satisfied: ",
+    input_stream: Optional[IO[str]] = None,
+    output_stream: Optional[IO[str]] = None,
+    prompt: str = "Type 'y' and press Enter to start early once minimum gray is satisfied.",
     enabled: bool = True,
+    require_tty: bool = True,
+    poll_interval_sec: float = 0.1,
 ) -> EarlyStartMonitor:
     override_event = threading.Event()
     stop_event = threading.Event()
     if not enabled:
-        return EarlyStartMonitor(override_event=override_event, stop_event=stop_event, thread=None)
+        return EarlyStartMonitor(
+            override_event=override_event,
+            stop_event=stop_event,
+            thread=None,
+            enabled=False,
+            reason="disabled",
+        )
+
+    input_stream = input_stream or sys.stdin
+    output_stream = output_stream or sys.stdout
+    try:
+        input_fd = input_stream.fileno()
+    except (AttributeError, OSError):
+        return EarlyStartMonitor(
+            override_event=override_event,
+            stop_event=stop_event,
+            thread=None,
+            enabled=False,
+            reason="stdin_has_no_fileno",
+        )
+
+    if require_tty and not os.isatty(input_fd):
+        return EarlyStartMonitor(
+            override_event=override_event,
+            stop_event=stop_event,
+            thread=None,
+            enabled=False,
+            reason="stdin_not_tty",
+        )
 
     def _worker() -> None:
-        try:
-            input_fn(prompt)
-        except EOFError:
-            return
-        if not stop_event.is_set():
-            override_event.set()
+        output_stream.write(prompt + "\n")
+        output_stream.flush()
+        while not stop_event.is_set():
+            try:
+                readable, _, _ = select.select([input_stream], [], [], poll_interval_sec)
+            except (OSError, ValueError):
+                return
+            if not readable:
+                continue
+            line = input_stream.readline()
+            if line == "":
+                return
+            response = line.strip().lower()
+            if response in {"y", "yes"}:
+                if not stop_event.is_set():
+                    override_event.set()
+                return
+            if response:
+                output_stream.write("Ignoring input. Type 'y' or 'yes' to start early.\n")
+                output_stream.flush()
 
     thread = threading.Thread(target=_worker, daemon=True)
     thread.start()
-    return EarlyStartMonitor(override_event=override_event, stop_event=stop_event, thread=thread)
+    return EarlyStartMonitor(
+        override_event=override_event,
+        stop_event=stop_event,
+        thread=thread,
+        enabled=True,
+        reason="ok",
+    )
 
 
 def stop_early_start_monitor(monitor: Optional[EarlyStartMonitor]) -> None:
     if monitor is None:
         return
     monitor.stop_event.set()
+    if monitor.thread is not None:
+        monitor.thread.join(timeout=1.0)
 
 
 def wait_for_prestimulus_gate(

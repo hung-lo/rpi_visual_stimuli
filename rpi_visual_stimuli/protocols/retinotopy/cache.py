@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
+import os
 from pathlib import Path
+import shutil
+import tempfile
 from typing import Any, Union
 
 from ...core.config import SystemConfig
@@ -53,46 +57,72 @@ def approximate_loaded_bytes(system_config: SystemConfig, config: RetinotopyConf
 
 
 def approximate_build_peak_bytes(system_config: SystemConfig, config: RetinotopyConfig) -> int:
-    source_rgb_bytes = system_config.screen.width_px * system_config.screen.height_px * 3 * config.source_frame_count
-    converted_bytes = system_config.screen.width_px * system_config.screen.height_px * 2 * config.source_frame_count
-    return source_rgb_bytes + converted_bytes
+    width = system_config.screen.width_px
+    height = system_config.screen.height_px
+    source_rgb_bytes = width * height * 3 * config.source_frame_count
+    converted_bytes = width * height * 2 * config.source_frame_count
+    final_sweep_bytes = len(config.enabled_directions) * converted_bytes
+    gray_bytes = width * height * 2
+    preview_bytes = len(config.enabled_directions) * width * height * 3
+    existing_partial_bytes = _directory_bytes(cache_root_for_config(system_config, config))
+    return final_sweep_bytes + source_rgb_bytes + converted_bytes + gray_bytes + preview_bytes + existing_partial_bytes
+
+
+def _directory_bytes(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+
+
+def _manifest_matches_config(
+    manifest: dict[str, Any],
+    system_config: SystemConfig,
+    config: RetinotopyConfig,
+) -> bool:
+    return (
+        manifest.get("protocol_cache_version") == config.cache_version
+        and manifest.get("render_config") == build_cache_hash_payload(system_config, config)
+        and manifest.get("number_of_source_frames") == config.source_frame_count
+        and manifest.get("refreshes_per_source_frame") == config.refreshes_per_movement_frame
+        and math.isclose(
+            float(manifest.get("planned_playback_duration_sec", -1.0)),
+            config.sweep_duration_sec,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        )
+        and isinstance(manifest.get("expected_files"), dict)
+    )
 
 
 def _gray_stem(seconds: float) -> str:
     return f"gray_{seconds:g}s".replace(".", "p")
 
 
-def ensure_cache(
+def _build_cache_contents(
+    cache_dir: Path,
+    cache_hash: str,
     system_config: SystemConfig,
     config: RetinotopyConfig,
     *,
     convert_raw_fn: ConvertRawFn,
-    compute_sha256: bool = False,
+    compute_sha256: bool,
 ) -> RetinotopyCache:
-    cache_dir = cache_root_for_config(system_config, config)
-    preview_dir = cache_dir / "preview"
-    preview_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
     sweep_paths: dict[str, Path] = {}
-    preview_paths: list[Path] = []
     for direction in config.enabled_directions:
         raw_path = cache_dir / f"{direction}.raw"
-        if not raw_path.exists() or raw_path.stat().st_size <= 0:
-            convert_rgb_frames_to_raw(
-                iter_direction_frames(system_config, config, direction=direction),
-                frame_count=config.source_frame_count,
-                width_px=system_config.screen.width_px,
-                height_px=system_config.screen.height_px,
-                refreshes_per_source_frame=config.refreshes_per_movement_frame,
-                colormode=system_config.screen.colormode,
-                final_path=raw_path,
-                convert_raw_fn=convert_raw_fn,
-                compute_sha256=compute_sha256,
-            )
+        convert_rgb_frames_to_raw(
+            iter_direction_frames(system_config, config, direction=direction),
+            frame_count=config.source_frame_count,
+            width_px=system_config.screen.width_px,
+            height_px=system_config.screen.height_px,
+            refreshes_per_source_frame=config.refreshes_per_movement_frame,
+            colormode=system_config.screen.colormode,
+            final_path=raw_path,
+            convert_raw_fn=convert_raw_fn,
+            compute_sha256=compute_sha256,
+        )
         sweep_paths[direction] = raw_path
-        preview_path = preview_dir / f"{direction}.png"
-        if not preview_path.exists():
-            save_direction_preview(preview_path, system_config, config, direction=direction)
-        preview_paths.append(preview_path)
 
     inter_sweep_frames = max(1, int(round(config.inter_sweep_gray_sec * system_config.screen.refresh_rate_hz)))
     inter_sweep_result = get_timed_gray_raw(
@@ -103,9 +133,11 @@ def ensure_cache(
         convert_raw_fn=convert_raw_fn,
         compute_sha256=compute_sha256,
     )
-    contact_sheet_path = preview_dir / "contact_sheet.png"
-    if preview_paths and not contact_sheet_path.exists():
-        save_contact_sheet(preview_paths, contact_sheet_path)
+    preview_paths, contact_sheet_path = ensure_preview_assets(
+        system_config,
+        config,
+        cache_dir=cache_dir,
+    )
 
     expected_files: dict[str, dict[str, Any]] = {}
     for path in sweep_paths.values():
@@ -119,7 +151,7 @@ def ensure_cache(
     manifest = {
         "schema_version": 1,
         "protocol_cache_version": config.cache_version,
-        "cache_hash": cache_dir.name,
+        "cache_hash": cache_hash,
         "created_utc": utc_iso_now(),
         "render_config": build_cache_hash_payload(system_config, config),
         "expected_files": expected_files,
@@ -129,10 +161,15 @@ def ensure_cache(
     }
     manifest_path = write_manifest(cache_dir, manifest)
     validation = validate_cache(cache_dir, require_checksums=False)
-    if not validation.valid:
-        raise RuntimeError(f"retinotopy cache validation failed: {validation.reason}")
+    if not validation.valid or validation.manifest is None or not _manifest_matches_config(
+        validation.manifest,
+        system_config,
+        config,
+    ):
+        reason = validation.reason or "manifest contents do not match the current retinotopy render configuration"
+        raise RuntimeError(f"retinotopy cache validation failed: {reason}")
     return RetinotopyCache(
-        cache_hash=cache_dir.name,
+        cache_hash=cache_hash,
         cache_dir=cache_dir,
         manifest_path=manifest_path,
         sweep_paths=sweep_paths,
@@ -140,6 +177,99 @@ def ensure_cache(
         preview_paths=preview_paths,
         contact_sheet_path=contact_sheet_path,
     )
+
+
+def _replace_cache_directory(cache_dir: Path, staging_dir: Path) -> None:
+    backup_dir = cache_dir.parent / f"{cache_dir.name}.backup"
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir)
+    try:
+        if cache_dir.exists():
+            os.replace(cache_dir, backup_dir)
+        os.replace(staging_dir, cache_dir)
+    except Exception:
+        if backup_dir.exists() and not cache_dir.exists():
+            os.replace(backup_dir, cache_dir)
+        raise
+    else:
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir)
+
+
+def ensure_preview_assets(
+    system_config: SystemConfig,
+    config: RetinotopyConfig,
+    *,
+    cache_dir: Union[str, Path, None] = None,
+) -> tuple[list[Path], Path]:
+    cache_dir = Path(cache_dir) if cache_dir is not None else cache_root_for_config(system_config, config)
+    preview_dir = cache_dir / "preview"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    preview_paths: list[Path] = []
+    for direction in config.enabled_directions:
+        preview_path = preview_dir / f"{direction}.png"
+        if not preview_path.exists():
+            save_direction_preview(preview_path, system_config, config, direction=direction)
+        preview_paths.append(preview_path)
+    contact_sheet_path = preview_dir / "contact_sheet.png"
+    if preview_paths and not contact_sheet_path.exists():
+        save_contact_sheet(preview_paths, contact_sheet_path)
+    return preview_paths, contact_sheet_path
+
+
+def ensure_cache(
+    system_config: SystemConfig,
+    config: RetinotopyConfig,
+    *,
+    convert_raw_fn: ConvertRawFn,
+    compute_sha256: bool = False,
+) -> RetinotopyCache:
+    cache_dir = cache_root_for_config(system_config, config)
+    validation = validate_cache(cache_dir, require_checksums=False)
+    if validation.valid and validation.manifest is not None and _manifest_matches_config(
+        validation.manifest,
+        system_config,
+        config,
+    ):
+        return RetinotopyCache(
+            cache_hash=cache_dir.name,
+            cache_dir=cache_dir,
+            manifest_path=cache_dir / "manifest.json",
+            sweep_paths={direction: cache_dir / f"{direction}.raw" for direction in config.enabled_directions},
+            inter_sweep_gray_path=cache_dir / f"{_gray_stem(config.inter_sweep_gray_sec)}.raw",
+            preview_paths=[cache_dir / "preview" / f"{direction}.png" for direction in config.enabled_directions],
+            contact_sheet_path=cache_dir / "preview" / "contact_sheet.png",
+        )
+    cache_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(
+        tempfile.mkdtemp(
+            prefix=f"{cache_dir.name}.tmp-",
+            dir=cache_dir.parent,
+        )
+    )
+    built_cache = None
+    try:
+        built_cache = _build_cache_contents(
+            staging_dir,
+            cache_dir.name,
+            system_config,
+            config,
+            convert_raw_fn=convert_raw_fn,
+            compute_sha256=compute_sha256,
+        )
+        _replace_cache_directory(cache_dir, staging_dir)
+        return RetinotopyCache(
+            cache_hash=cache_dir.name,
+            cache_dir=cache_dir,
+            manifest_path=cache_dir / "manifest.json",
+            sweep_paths={key: cache_dir / path.relative_to(staging_dir) for key, path in built_cache.sweep_paths.items()},
+            inter_sweep_gray_path=cache_dir / built_cache.inter_sweep_gray_path.relative_to(staging_dir),
+            preview_paths=[cache_dir / path.relative_to(staging_dir) for path in built_cache.preview_paths],
+            contact_sheet_path=cache_dir / built_cache.contact_sheet_path.relative_to(staging_dir),
+        )
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
 
 
 def copy_manifest(cache: RetinotopyCache, session_manifest_path: Union[str, Path]) -> Path:
