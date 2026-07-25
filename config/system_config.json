@@ -1,0 +1,43 @@
+{
+  "output_root": "/mnt/hd",
+  "cache_root": "/mnt/hd/vstim_cache",
+  "screen": {
+    "width_px": 1024,
+    "height_px": 600,
+    "refresh_rate_hz": 60,
+    "colormode": 16,
+    "background_gray_u8": 127,
+    "visible_width_cm": 53.1456,
+    "visible_height_cm": 29.8944
+  },
+  "photodiode": {
+    "enabled": true,
+    "corner": "top_right",
+    "size_px": 120,
+    "margin_px": 0,
+    "on_rgb": [
+      255,
+      255,
+      255
+    ],
+    "off_rgb": [
+      0,
+      0,
+      0
+    ]
+  },
+  "gpio": {
+    "enabled": false,
+    "ttl_pin_bcm": 23,
+    "pulse_sec": 0.005
+  },
+  "camera": {
+    "host": "pi@192.168.1.152",
+    "remote_repo": "/home/pi/RPi4_behavior_boxes",
+    "remote_start": "/home/pi/RPi4_behavior_boxes/video_acquisition/start_acquisition.py",
+    "remote_stop": "/home/pi/RPi4_behavior_boxes/video_acquisition/stop_acquisition.sh",
+    "remote_video_root": "/home/pi/stim_logs",
+    "framerate": 30,
+    "default_prestim_baseline_minutes": 3.0
+  }
+}
