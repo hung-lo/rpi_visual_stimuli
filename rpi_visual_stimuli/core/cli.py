@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 from .config import default_system_config_path
 
@@ -27,7 +27,7 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
     return parser
 
 
-def prompt_text(prompt: str, *, input_fn: InputFn = input, default: str | None = None) -> str:
+def prompt_text(prompt: str, *, input_fn: InputFn = input, default: Optional[str] = None) -> str:
     response = input_fn(prompt).strip()
     if response:
         return response

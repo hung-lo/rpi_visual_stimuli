@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 import time
+from typing import Optional
 
 from ...core import baseline as baseline_core
 from ...core import camera as camera_core
@@ -68,7 +69,7 @@ def _print_summary(
     trials,
     cache_dir: Path,
     camera_enabled: bool,
-    baseline_minutes: float | None,
+    baseline_minutes: Optional[float],
 ) -> None:
     print()
     print("Retinotopy setup summary:")
@@ -117,7 +118,7 @@ def _initial_metadata(
     config,
     *,
     camera_enabled: bool,
-    baseline_minutes: float | None,
+    baseline_minutes: Optional[float],
     resolved_seed: int,
     cache,
     preflight,
@@ -446,7 +447,7 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

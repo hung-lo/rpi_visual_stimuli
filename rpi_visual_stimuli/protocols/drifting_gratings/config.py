@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 import warnings
 
 from ...core.config import SystemConfig
@@ -61,10 +62,10 @@ class DriftingGratingConfig:
     mean_luminance: float
     starting_phase_deg: float
     grating_mode: str
-    rectangular_patch_geometry: RectangularPatchGeometry | None
+    rectangular_patch_geometry: Optional[RectangularPatchGeometry]
     initial_gray_sec: float
     final_gray_sec: float
-    sequence_seed: int | None
+    sequence_seed: Optional[int]
     cache_version: str
     stimulus_frame_count: int
 
@@ -109,10 +110,10 @@ def build_config(
     mean_luminance: float = DEFAULT_MEAN_LUMINANCE,
     starting_phase_deg: float = DEFAULT_STARTING_PHASE_DEG,
     grating_mode: str = DEFAULT_GRATING_MODE,
-    rectangular_patch_geometry: RectangularPatchGeometry | None = None,
+    rectangular_patch_geometry: Optional[RectangularPatchGeometry] = None,
     initial_gray_sec: float = DEFAULT_INITIAL_GRAY_SEC,
     final_gray_sec: float = DEFAULT_FINAL_GRAY_SEC,
-    sequence_seed: int | None = None,
+    sequence_seed: Optional[int] = None,
     cache_version: str = DEFAULT_CACHE_VERSION,
 ) -> DriftingGratingConfig:
     normalized_orientations = tuple(normalize_orientation_deg(value) for value in orientations_deg)

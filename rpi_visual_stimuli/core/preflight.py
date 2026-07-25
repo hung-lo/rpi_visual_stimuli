@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import math
 from pathlib import Path
 import shutil
-from typing import Iterable
+from typing import Iterable, Optional, Union
 
 
 def format_bytes(value: int) -> str:
@@ -18,7 +18,7 @@ def format_bytes(value: int) -> str:
     return f"{amount:.1f} {unit}"
 
 
-def read_meminfo(path: str | Path = "/proc/meminfo") -> dict[str, int]:
+def read_meminfo(path: Union[str, Path] = "/proc/meminfo") -> dict[str, int]:
     meminfo: dict[str, int] = {}
     for line in Path(path).read_text(encoding="utf-8").splitlines():
         if ":" not in line:
@@ -35,7 +35,7 @@ def read_meminfo(path: str | Path = "/proc/meminfo") -> dict[str, int]:
     return meminfo
 
 
-def read_mem_available_bytes(meminfo: dict[str, int] | None = None) -> int:
+def read_mem_available_bytes(meminfo: Optional[dict[str, int]] = None) -> int:
     meminfo = meminfo or read_meminfo()
     if "MemAvailable" in meminfo:
         return meminfo["MemAvailable"]
@@ -44,7 +44,7 @@ def read_mem_available_bytes(meminfo: dict[str, int] | None = None) -> int:
     raise KeyError("MemAvailable and MemFree are missing from meminfo")
 
 
-def _coerce_file_size(item: int | str | Path) -> int:
+def _coerce_file_size(item: Union[int, str, Path]) -> int:
     if isinstance(item, int):
         return item
     return Path(item).stat().st_size
@@ -52,7 +52,7 @@ def _coerce_file_size(item: int | str | Path) -> int:
 
 @dataclass(frozen=True)
 class MemoryCheckResult:
-    total_memory_bytes: int | None
+    total_memory_bytes: Optional[int]
     available_memory_bytes: int
     total_raw_file_bytes: int
     overhead_factor: float
@@ -60,7 +60,7 @@ class MemoryCheckResult:
     required_bytes: int
     shortfall_bytes: int
 
-    def to_dict(self) -> dict[str, int | float | None]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "total_memory_bytes": self.total_memory_bytes,
             "available_memory_bytes": self.available_memory_bytes,
@@ -73,10 +73,10 @@ class MemoryCheckResult:
 
 
 def check_memory_before_loading(
-    raw_files_or_sizes: Iterable[int | str | Path],
+    raw_files_or_sizes: Iterable[Union[int, str, Path]],
     *,
-    available_memory_bytes: int | None = None,
-    meminfo_path: str | Path = "/proc/meminfo",
+    available_memory_bytes: Optional[int] = None,
+    meminfo_path: Union[str, Path] = "/proc/meminfo",
     overhead_factor: float = 1.15,
     safety_margin_bytes: int = 0,
     suggestion: str = "",
@@ -125,18 +125,19 @@ class DiskCheckResult:
 
 
 def check_disk_space_before_build(
-    target_path: str | Path,
+    target_path: Union[str, Path],
     *,
     required_bytes: int,
     margin_bytes: int = 0,
 ) -> DiskCheckResult:
     path = Path(target_path)
     usage = shutil.disk_usage(path if path.exists() else path.parent)
+    free_bytes = usage.free if hasattr(usage, "free") else usage[2]
     total_required = required_bytes + margin_bytes
-    shortfall = max(0, total_required - usage.free)
+    shortfall = max(0, total_required - free_bytes)
     result = DiskCheckResult(
         target_path=path,
-        free_bytes=usage.free,
+        free_bytes=free_bytes,
         required_bytes=required_bytes,
         margin_bytes=margin_bytes,
         shortfall_bytes=shortfall,
@@ -144,7 +145,7 @@ def check_disk_space_before_build(
     if shortfall > 0:
         raise OSError(
             "Insufficient disk space: "
-            f"free={format_bytes(usage.free)}, required={format_bytes(required_bytes)}, "
+            f"free={format_bytes(free_bytes)}, required={format_bytes(required_bytes)}, "
             f"margin={format_bytes(margin_bytes)}, shortfall={format_bytes(shortfall)}."
         )
     return result

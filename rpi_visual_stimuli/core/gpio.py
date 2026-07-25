@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
-from typing import Any
+from typing import Any, Optional
 
 from .config import GPIOConfig
 
@@ -26,7 +26,7 @@ class GPIOController:
         self.module.cleanup(self.pin)
 
 
-def setup_gpio(gpio_config: GPIOConfig) -> GPIOController | None:
+def setup_gpio(gpio_config: GPIOConfig) -> Optional[GPIOController]:
     if not gpio_config.enabled:
         return None
     try:

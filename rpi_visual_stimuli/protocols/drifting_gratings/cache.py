@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 
 from ...core.config import SystemConfig
 from ...core.gray_screen import get_timed_gray_raw
@@ -154,5 +154,5 @@ def ensure_cache(
     )
 
 
-def copy_manifest(cache: DriftingGratingCache, session_manifest_path: str | Path) -> Path:
+def copy_manifest(cache: DriftingGratingCache, session_manifest_path: Union[str, Path]) -> Path:
     return copy_manifest_to_session(cache.cache_dir, session_manifest_path)

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "rpi_visual_stimuli"
 version = "0.1.0"
 description = "Headless Raspberry Pi visual stimulus protocols for retinotopy and drifting gratings."
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

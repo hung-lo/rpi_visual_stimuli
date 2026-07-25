@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import random
 import time
+from typing import Optional
 
 from ...core.config import SystemConfig
-from .config import DriftingGratingConfig
-from .stimulus import drift_direction_deg
+from .config import DriftingGratingConfig, normalize_orientation_deg
 
 
-def _resolved_seed(seed: int | None) -> int:
+def _resolved_seed(seed: Optional[int]) -> int:
     if seed is not None:
         return int(seed)
     return int(time.time_ns() % (2**32))
+
+
+def drift_direction_deg(bar_orientation_deg: float) -> float:
+    return (normalize_orientation_deg(bar_orientation_deg) - 90.0) % 360.0
 
 
 def format_orientation_stem(orientation_id: int, bar_orientation_deg: float) -> str:

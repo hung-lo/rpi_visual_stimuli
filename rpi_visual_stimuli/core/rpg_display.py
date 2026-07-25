@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, Optional, Union
 
 from .config import SystemConfig
 from .timestamps import capture_timestamp
@@ -28,7 +28,7 @@ def open_screen(system_config: SystemConfig):
     )
 
 
-def load_raws(screen: Any, key_to_path: dict[str, str | Path]) -> dict[str, Any]:
+def load_raws(screen: Any, key_to_path: dict[str, Union[str, Path]]) -> dict[str, Any]:
     return {key: screen.load_raw(str(path)) for key, path in key_to_path.items()}
 
 
@@ -40,11 +40,11 @@ class DisplayTiming:
     display_request_perf_counter_ns: int
     display_return_perf_counter_ns: int
     display_call_duration_sec: float
-    start_time_unix: float | None
-    mean_interframe_us: float | None
-    stddev_interframe_us: float | None
+    start_time_unix: Optional[float]
+    mean_interframe_us: Optional[float]
+    stddev_interframe_us: Optional[float]
 
-    def to_event_fields(self) -> dict[str, int | float | str | None]:
+    def to_event_fields(self) -> dict[str, object]:
         return {
             "display_request_unix_ns": self.display_request_unix_ns,
             "display_return_unix_ns": self.display_return_unix_ns,
@@ -58,7 +58,7 @@ class DisplayTiming:
         }
 
 
-def extract_rpg_performance(perf: Any) -> dict[str, float | None]:
+def extract_rpg_performance(perf: Any) -> dict[str, Optional[float]]:
     if perf is None:
         return {
             "start_time_unix": None,

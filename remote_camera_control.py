@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from typing import Optional
 
 
 DEFAULT_CAMERA_HOST = "pi@192.168.1.152"
@@ -135,7 +136,7 @@ def convert_h264_to_mp4(local_video_dir: Path, *, framerate: int = CAMERA_FRAMER
         print(f"Converted {input_path.name} -> {output_path.name}")
 
 
-def append_event(local_video_dir: Path, event: str, details: dict[str, object] | None = None) -> None:
+def append_event(local_video_dir: Path, event: str, details: Optional[dict[str, object]] = None) -> None:
     local_video_dir.mkdir(parents=True, exist_ok=True)
     path = local_video_dir / "camera_control_events.csv"
     exists = path.exists()
@@ -176,7 +177,7 @@ def load_state(*, allow_legacy_state: bool = False) -> dict[str, object]:
     )
 
 
-def resolve_camera_host(args, state: dict[str, object] | None = None) -> str:
+def resolve_camera_host(args, state: Optional[dict[str, object]] = None) -> str:
     if getattr(args, "camera_host", None):
         return args.camera_host
     if state and state.get("camera_host"):
@@ -256,7 +257,7 @@ def start_camera(args):
     return state
 
 
-def stop_camera(args, state: dict[str, object] | None = None):
+def stop_camera(args, state: Optional[dict[str, object]] = None):
     if state is None:
         state = load_state(allow_legacy_state=args.allow_legacy_state)
     camera_host = resolve_camera_host(args, state)
@@ -314,7 +315,7 @@ def preview_camera(args):
         print("Preview stopped.")
 
 
-def fetch_camera(args, state: dict[str, object] | None = None):
+def fetch_camera(args, state: Optional[dict[str, object]] = None):
     if state is None:
         try:
             state = load_state(allow_legacy_state=args.allow_legacy_state)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from math import ceil
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Union
 
 import numpy as np
 
@@ -112,7 +112,7 @@ def _orientation_label(bar_orientation_deg: float) -> str:
 
 
 def save_preview_png(
-    preview_path: str | Path,
+    preview_path: Union[str, Path],
     system_config: SystemConfig,
     config: DriftingGratingConfig,
     *,
@@ -135,7 +135,7 @@ def save_preview_png(
     return output_path
 
 
-def save_contact_sheet(preview_paths: list[Path], destination_path: str | Path) -> Path:
+def save_contact_sheet(preview_paths: list[Path], destination_path: Union[str, Path]) -> Path:
     Image, ImageDraw = _import_pillow()
     images = [Image.open(path).convert("RGB") for path in preview_paths]
     if not images:

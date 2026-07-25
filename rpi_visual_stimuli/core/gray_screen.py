@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional, Union
 
 import numpy as np
 
@@ -28,12 +29,12 @@ def build_gray_frame(system_config: SystemConfig) -> np.ndarray:
 
 
 def get_timed_gray_raw(
-    cache_dir: str | Path,
+    cache_dir: Union[str, Path],
     system_config: SystemConfig,
     *,
     duration_frames: int,
     convert_raw_fn: ConvertRawFn,
-    stem: str | None = None,
+    stem: Optional[str] = None,
     compute_sha256: bool = False,
 ) -> RawConversionResult:
     if duration_frames <= 0:
@@ -65,7 +66,7 @@ def get_timed_gray_raw(
 
 
 def get_baseline_gray_raw(
-    cache_dir: str | Path,
+    cache_dir: Union[str, Path],
     system_config: SystemConfig,
     *,
     convert_raw_fn: ConvertRawFn,

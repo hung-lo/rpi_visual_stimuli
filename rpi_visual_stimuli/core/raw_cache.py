@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
-from typing import Any
+from typing import Any, Optional, Union
 
 from .metadata import atomic_write_json
 from .raw_conversion import sha256_file
@@ -18,8 +18,8 @@ MANIFEST_FILENAME = "manifest.json"
 class CacheValidationResult:
     valid: bool
     cache_dir: Path
-    manifest: dict[str, Any] | None
-    reason: str | None = None
+    manifest: Optional[dict[str, Any]]
+    reason: Optional[str] = None
 
 
 def stable_json_dumps(payload: dict[str, Any]) -> str:
@@ -30,7 +30,7 @@ def stable_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(stable_json_dumps(payload).encode("utf-8")).hexdigest()
 
 
-def expected_file_entry(path: str | Path, *, checksum: str | None = None) -> dict[str, Any]:
+def expected_file_entry(path: Union[str, Path], *, checksum: Optional[str] = None) -> dict[str, Any]:
     actual_path = Path(path)
     entry = {"size_bytes": actual_path.stat().st_size}
     if checksum is not None:
@@ -38,7 +38,7 @@ def expected_file_entry(path: str | Path, *, checksum: str | None = None) -> dic
     return entry
 
 
-def write_manifest(cache_dir: str | Path, manifest: dict[str, Any]) -> Path:
+def write_manifest(cache_dir: Union[str, Path], manifest: dict[str, Any]) -> Path:
     cache_path = Path(cache_dir)
     cache_path.mkdir(parents=True, exist_ok=True)
     manifest_path = cache_path / MANIFEST_FILENAME
@@ -46,12 +46,12 @@ def write_manifest(cache_dir: str | Path, manifest: dict[str, Any]) -> Path:
     return manifest_path
 
 
-def load_manifest(cache_dir: str | Path) -> dict[str, Any]:
+def load_manifest(cache_dir: Union[str, Path]) -> dict[str, Any]:
     manifest_path = Path(cache_dir) / MANIFEST_FILENAME
     return json.loads(manifest_path.read_text(encoding="utf-8"))
 
 
-def validate_cache(cache_dir: str | Path, *, require_checksums: bool = False) -> CacheValidationResult:
+def validate_cache(cache_dir: Union[str, Path], *, require_checksums: bool = False) -> CacheValidationResult:
     cache_path = Path(cache_dir)
     manifest_path = cache_path / MANIFEST_FILENAME
     if not manifest_path.exists():
@@ -80,7 +80,7 @@ def validate_cache(cache_dir: str | Path, *, require_checksums: bool = False) ->
     return CacheValidationResult(True, cache_path, manifest, None)
 
 
-def copy_manifest_to_session(cache_dir: str | Path, destination_path: str | Path) -> Path:
+def copy_manifest_to_session(cache_dir: Union[str, Path], destination_path: Union[str, Path]) -> Path:
     source = Path(cache_dir) / MANIFEST_FILENAME
     destination = Path(destination_path)
     destination.parent.mkdir(parents=True, exist_ok=True)

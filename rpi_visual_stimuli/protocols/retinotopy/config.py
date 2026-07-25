@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 import warnings
 
 from ...core.config import SystemConfig
@@ -38,7 +39,7 @@ class RetinotopyConfig:
     enabled_directions: tuple[str, ...]
     repeats_per_direction: int
     sequence_order_mode: str
-    sequence_seed: int | None
+    sequence_seed: Optional[int]
     cache_version: str
     source_frame_count: int
     refreshes_per_movement_frame: int
@@ -73,7 +74,7 @@ def build_config(
     enabled_directions: tuple[str, ...] = DEFAULT_DIRECTIONS,
     repeats_per_direction: int = DEFAULT_REPEATS_PER_DIRECTION,
     sequence_order_mode: str = DEFAULT_SEQUENCE_ORDER_MODE,
-    sequence_seed: int | None = None,
+    sequence_seed: Optional[int] = None,
     cache_version: str = DEFAULT_CACHE_VERSION,
 ) -> RetinotopyConfig:
     if sweep_duration_sec <= 0 or inter_sweep_gray_sec <= 0 or initial_gray_sec <= 0 or final_gray_sec <= 0:

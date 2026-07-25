@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional, Union
 
 
 SUPPORTED_PHOTODIODE_CORNERS = (
@@ -30,7 +30,7 @@ def _require_bool(value: Any, name: str) -> bool:
     return value
 
 
-def _require_int(value: Any, name: str, *, minimum: int | None = None) -> int:
+def _require_int(value: Any, name: str, *, minimum: Optional[int] = None) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ConfigurationError(f"{name} must be an integer")
     if minimum is not None and value < minimum:
@@ -38,7 +38,7 @@ def _require_int(value: Any, name: str, *, minimum: int | None = None) -> int:
     return value
 
 
-def _require_float(value: Any, name: str, *, greater_than: float | None = None) -> float:
+def _require_float(value: Any, name: str, *, greater_than: Optional[float] = None) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigurationError(f"{name} must be numeric")
     numeric = float(value)
@@ -239,7 +239,7 @@ def _validate_gpio(gpio: GPIOConfig) -> None:
         raise ConfigurationError("gpio.pulse_sec must be positive")
 
 
-def load_system_config(path: str | Path) -> SystemConfig:
+def load_system_config(path: Union[str, Path]) -> SystemConfig:
     config_path = Path(path)
     payload = json.loads(config_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -305,7 +305,7 @@ def load_system_config(path: str | Path) -> SystemConfig:
     return system
 
 
-def default_system_config_path(repo_root: str | Path | None = None) -> Path:
+def default_system_config_path(repo_root: Optional[Union[str, Path]] = None) -> Path:
     if repo_root is None:
         repo_root = Path(__file__).resolve().parents[2]
     return Path(repo_root) / "config" / "system_config.json"

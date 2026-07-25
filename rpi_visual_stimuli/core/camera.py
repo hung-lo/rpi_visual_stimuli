@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 import sys
+from typing import Optional, Union
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -18,7 +19,7 @@ class CameraCommandResult:
     stderr: str
 
 
-def manual_stop_fetch_command(repo_root: str | Path | None = None) -> str:
+def manual_stop_fetch_command(repo_root: Optional[Union[str, Path]] = None) -> str:
     root = Path(repo_root) if repo_root is not None else PROJECT_ROOT
     return f"cd {root}\npython3 remote_camera_control.py stop-fetch"
 

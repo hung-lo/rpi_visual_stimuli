@@ -17,7 +17,7 @@ def unix_ns_to_seconds_string(unix_ns: int) -> str:
     return f"{seconds}.{nanoseconds:09d}"
 
 
-def capture_timestamp() -> dict[str, int | str]:
+def capture_timestamp() -> dict[str, object]:
     unix_ns = time.time_ns()
     return {
         "unix_ns": unix_ns,

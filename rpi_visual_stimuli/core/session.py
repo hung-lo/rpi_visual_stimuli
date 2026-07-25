@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional, Union
 
 from .timestamps import utc_session_stamp
 
@@ -54,9 +55,9 @@ def build_session_context(
     protocol_name: str,
     mouse_id_raw: str,
     session_notes: str,
-    output_root: str | Path,
+    output_root: Union[str, Path],
     *,
-    session_stamp: str | None = None,
+    session_stamp: Optional[str] = None,
 ) -> SessionContext:
     mouse_id = sanitize_id(mouse_id_raw) or "mouse"
     session_stamp = session_stamp or utc_session_stamp()

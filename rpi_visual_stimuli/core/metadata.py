@@ -6,10 +6,10 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
-from typing import Any
+from typing import Any, Optional, Union
 
 
-def atomic_write_json(path: str | Path, payload: dict[str, Any]) -> None:
+def atomic_write_json(path: Union[str, Path], payload: dict[str, Any]) -> None:
     final_path = Path(path)
     final_path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -28,7 +28,7 @@ def atomic_write_json(path: str | Path, payload: dict[str, Any]) -> None:
     os.replace(temp_name, final_path)
 
 
-def update_session_metadata(path: str | Path, payload: dict[str, Any] | None = None, **updates: Any) -> dict[str, Any]:
+def update_session_metadata(path: Union[str, Path], payload: Optional[dict[str, Any]] = None, **updates: Any) -> dict[str, Any]:
     metadata_path = Path(path)
     merged: dict[str, Any] = {}
     if metadata_path.exists():
@@ -40,7 +40,7 @@ def update_session_metadata(path: str | Path, payload: dict[str, Any] | None = N
     return merged
 
 
-def get_git_commit(repo_root: str | Path) -> str | None:
+def get_git_commit(repo_root: Union[str, Path]) -> Optional[str]:
     try:
         result = subprocess.run(
             ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
@@ -53,7 +53,7 @@ def get_git_commit(repo_root: str | Path) -> str | None:
     return result.stdout.strip() or None
 
 
-def read_source_provenance(path: str | Path) -> dict[str, str]:
+def read_source_provenance(path: Union[str, Path]) -> dict[str, str]:
     content = Path(path).read_text(encoding="utf-8")
     matches = re.findall(r"^\s*-\s*([a-zA-Z0-9_]+):\s*`?([^`\n]+)`?\s*$", content, re.MULTILINE)
     return {key: value.strip() for key, value in matches}

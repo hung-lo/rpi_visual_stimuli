@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import random
 import time
+from typing import Optional
 
 from ...core.config import SystemConfig
 from .config import RetinotopyConfig
 from .directions import get_direction
 
 
-def _resolved_seed(seed: int | None) -> int:
+def _resolved_seed(seed: Optional[int]) -> int:
     if seed is not None:
         return int(seed)
     return int(time.time_ns() % (2**32))

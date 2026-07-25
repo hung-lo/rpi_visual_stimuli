@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import os
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Union
 
 from .timestamps import capture_timestamp
 
@@ -37,7 +37,7 @@ def _flush(handle, *, fsync: bool) -> None:
         os.fsync(handle.fileno())
 
 
-def write_csv(path: str | Path, rows: Iterable[Mapping[str, object]], fieldnames: list[str], *, fsync: bool = False) -> None:
+def write_csv(path: Union[str, Path], rows: Iterable[Mapping[str, object]], fieldnames: list[str], *, fsync: bool = False) -> None:
     csv_path = Path(path)
     _ensure_dir(csv_path)
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
@@ -48,7 +48,7 @@ def write_csv(path: str | Path, rows: Iterable[Mapping[str, object]], fieldnames
         _flush(handle, fsync=fsync)
 
 
-def append_csv_row(path: str | Path, row: Mapping[str, object], fieldnames: list[str], *, fsync: bool = False) -> None:
+def append_csv_row(path: Union[str, Path], row: Mapping[str, object], fieldnames: list[str], *, fsync: bool = False) -> None:
     csv_path = Path(path)
     _ensure_dir(csv_path)
     exists = csv_path.exists()

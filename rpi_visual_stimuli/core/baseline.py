@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import threading
 import time
-from typing import Callable
+from typing import Callable, Optional
 
 
 InputFn = Callable[[str], str]
@@ -13,7 +13,7 @@ InputFn = Callable[[str], str]
 class EarlyStartMonitor:
     override_event: threading.Event
     stop_event: threading.Event
-    thread: threading.Thread | None
+    thread: Optional[threading.Thread]
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,7 @@ class BaselineResult:
     gray_remaining_at_gate_entry: float
     waited_for_minimum_gray_after_override: bool
 
-    def to_dict(self) -> dict[str, float | bool | str]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "requested_baseline_seconds": self.requested_baseline_seconds,
             "actual_camera_baseline_seconds": self.actual_camera_baseline_seconds,
@@ -66,7 +66,7 @@ def start_early_start_monitor(
     return EarlyStartMonitor(override_event=override_event, stop_event=stop_event, thread=thread)
 
 
-def stop_early_start_monitor(monitor: EarlyStartMonitor | None) -> None:
+def stop_early_start_monitor(monitor: Optional[EarlyStartMonitor]) -> None:
     if monitor is None:
         return
     monitor.stop_event.set()
@@ -78,7 +78,7 @@ def wait_for_prestimulus_gate(
     minimum_gray_seconds: float,
     baseline_start_monotonic: float,
     gray_start_monotonic: float,
-    override_event: threading.Event | None = None,
+    override_event: Optional[threading.Event] = None,
     now_fn: Callable[[], float] = time.monotonic,
     sleep_fn: Callable[[float], None] = time.sleep,
     poll_interval_sec: float = 0.05,

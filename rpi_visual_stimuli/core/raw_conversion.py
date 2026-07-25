@@ -5,7 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 import tempfile
-from typing import Iterable, Protocol
+from typing import Iterable, Optional, Protocol, Union
 
 
 class ConvertRawFn(Protocol):
@@ -26,12 +26,12 @@ class ConvertRawFn(Protocol):
 class RawConversionResult:
     path: Path
     file_size_bytes: int
-    sha256: str | None
+    sha256: Optional[str]
     source_frame_count: int
     refreshes_per_source_frame: int
 
 
-def sha256_file(path: str | Path) -> str:
+def sha256_file(path: Union[str, Path]) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -61,7 +61,7 @@ def convert_rgb_frames_to_raw(
     height_px: int,
     refreshes_per_source_frame: int,
     colormode: int,
-    final_path: str | Path,
+    final_path: Union[str, Path],
     convert_raw_fn: ConvertRawFn,
     compute_sha256: bool = False,
 ) -> RawConversionResult:
