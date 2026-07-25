@@ -33,6 +33,8 @@ LOCAL_VIDEO_ROOT = Path("/mnt/hd")
 SESSION_NAME_SUFFIX = "rpi_visual_stimuli"
 CAMERA_FRAMERATE = 30
 DEFAULT_VERIFY_WAIT_SEC = 1.5
+SSH_CONNECT_TIMEOUT_SEC = 5
+SSH_COMMAND_TIMEOUT_SEC = 15.0
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 STATE_FILE = LOCAL_VIDEO_ROOT / ".rpi_visual_stimuli_camera_session.json"
@@ -79,12 +81,24 @@ def run_cmd(
     check: bool = True,
     dry_run: bool = False,
     quiet: bool = False,
+    timeout_sec: Optional[float] = None,
 ) -> subprocess.CompletedProcess[str]:
     if not quiet:
         print("+ " + " ".join(shlex.quote(part) for part in cmd))
     if dry_run:
         return subprocess.CompletedProcess(cmd, 0, "", "")
-    result = subprocess.run(cmd, check=False, text=True, capture_output=True)
+    try:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CameraControlError(
+            f"command timed out after {timeout_sec} seconds: {' '.join(cmd)}"
+        ) from exc
     if check and result.returncode != 0:
         if result.stdout and not quiet:
             print(result.stdout, end="")
@@ -106,8 +120,9 @@ def run_ssh(
     *,
     check: bool = True,
     dry_run: bool = False,
-    batch_mode: bool = False,
-    connect_timeout: Optional[int] = None,
+    batch_mode: bool = True,
+    connect_timeout: Optional[int] = SSH_CONNECT_TIMEOUT_SEC,
+    command_timeout_sec: Optional[float] = SSH_COMMAND_TIMEOUT_SEC,
     quiet: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     cmd = ["ssh"]
@@ -116,7 +131,13 @@ def run_ssh(
     if connect_timeout is not None:
         cmd.extend(["-o", f"ConnectTimeout={int(connect_timeout)}"])
     cmd.extend([camera_host, remote_cmd])
-    return run_cmd(cmd, check=check, dry_run=dry_run, quiet=quiet)
+    return run_cmd(
+        cmd,
+        check=check,
+        dry_run=dry_run,
+        quiet=quiet,
+        timeout_sec=command_timeout_sec,
+    )
 
 
 def run_rsync(
@@ -391,7 +412,8 @@ def _run_preflight_checks(args) -> dict[str, object]:
         check=False,
         dry_run=args.dry_run,
         batch_mode=True,
-        connect_timeout=5,
+        connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+        command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
         quiet=True,
     )
     if not args.dry_run:
@@ -415,7 +437,8 @@ def _run_preflight_checks(args) -> dict[str, object]:
         check=False,
         dry_run=args.dry_run,
         batch_mode=True,
-        connect_timeout=5,
+        connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+        command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
         quiet=True,
     )
     if not args.dry_run:
@@ -429,7 +452,8 @@ def _run_preflight_checks(args) -> dict[str, object]:
         remote_start,
         dry_run=args.dry_run,
         batch_mode=True,
-        connect_timeout=5,
+        connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+        command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
     )
     known_state = None
     try:
@@ -505,7 +529,14 @@ def start_camera(args) -> int:
         f"{shlex.quote(state['remote_base_path'])} {int(args.framerate)} "
         f">> {shlex.quote(remote_log)} 2>&1 &"
     )
-    run_ssh(str(state["camera_host"]), launch_cmd, dry_run=args.dry_run)
+    run_ssh(
+        str(state["camera_host"]),
+        launch_cmd,
+        dry_run=args.dry_run,
+        batch_mode=True,
+        connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+        command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
+    )
     if not args.dry_run:
         time.sleep(float(args.verify_wait_sec))
     acquisition = _query_remote_acquisition(
@@ -513,7 +544,8 @@ def start_camera(args) -> int:
         str(state["remote_camera_start"]),
         dry_run=args.dry_run,
         batch_mode=True,
-        connect_timeout=5,
+        connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+        command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
     )
     verify_cmd = (
         f"test -d {shlex.quote(state['remote_session_dir'])} && "
@@ -526,7 +558,8 @@ def start_camera(args) -> int:
         check=False,
         dry_run=args.dry_run,
         batch_mode=True,
-        connect_timeout=5,
+        connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+        command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
         quiet=True,
     )
     if not args.dry_run:
@@ -571,6 +604,9 @@ def stop_camera(args, state: Optional[dict[str, object]] = None) -> int:
         f"bash {shlex.quote(resolve_remote_stop(args, state))}",
         check=not args.ignore_stop_errors,
         dry_run=args.dry_run,
+        batch_mode=True,
+        connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+        command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
     )
     append_event(local_video_dir, "camera_stop_returned", {"camera_host": camera_host})
     print("Camera stop command sent.")
@@ -597,7 +633,14 @@ def preview_camera(args) -> int:
         "fi"
     )
     print(f"Starting remote camera preview on {camera_host}...")
-    run_ssh(camera_host, preview_cmd, dry_run=args.dry_run)
+    run_ssh(
+        camera_host,
+        preview_cmd,
+        dry_run=args.dry_run,
+        batch_mode=True,
+        connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+        command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
+    )
     print("Preview started. Type y and Enter to stop it.")
     if not args.dry_run:
         while True:
@@ -608,7 +651,14 @@ def preview_camera(args) -> int:
             if response == "y":
                 break
             print("Preview still running. Type y and Enter to stop.")
-        run_ssh(camera_host, stop_cmd, dry_run=args.dry_run)
+        run_ssh(
+            camera_host,
+            stop_cmd,
+            dry_run=args.dry_run,
+            batch_mode=True,
+            connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+            command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
+        )
         print("Preview stopped.")
     return 0
 
@@ -693,7 +743,8 @@ def status_camera(args) -> int:
         remote_start,
         dry_run=args.dry_run,
         batch_mode=True,
-        connect_timeout=5,
+        connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+        command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
     )
     print("Camera status:")
     print(f"  Camera host: {camera_host}")

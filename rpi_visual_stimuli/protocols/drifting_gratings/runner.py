@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shlex
 import sys
 import time
 from typing import Any, Optional
@@ -161,6 +162,10 @@ def _write_preview_plan(cache_dir: Path, rows: list[dict[str, object]]) -> Path:
     return preview_plan_path
 
 
+def _format_command(command: tuple[str, ...]) -> str:
+    return " ".join(shlex.quote(part) for part in command)
+
+
 def _resolve_preview_cache_dir(repo_root: Path, cache_dir: Path) -> tuple[Path, bool]:
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -236,8 +241,12 @@ def _initial_metadata(
             "remote_session_path": f"{system_config.camera.remote_video_root.rstrip('/')}/{session.session_id}",
             "local_video_path": str(session.video_directory),
             "requested_baseline_minutes": baseline_minutes,
+            "stop_requested": False,
             "stopped": False,
+            "settle_seconds": None,
+            "fetch_requested": False,
             "fetched": False,
+            "convert_requested": False,
             "conversion_attempted": False,
             "conversion_succeeded": False,
             "cleanup_error": None,
@@ -381,8 +390,10 @@ def _serialize_camera_cleanup_result(result: Optional[camera_core.CameraCleanupR
     return {
         "stop_requested": result.stop_result is not None,
         "stop_succeeded": bool(result.stop_result and result.stop_result.succeeded),
+        "settle_seconds": result.settle_seconds,
         "fetch_requested": result.fetch_result is not None,
         "fetch_succeeded": bool(result.fetch_result and result.fetch_result.succeeded),
+        "convert_requested": result.convert_result is not None,
         "conversion_attempted": result.convert_result is not None,
         "conversion_succeeded": bool(result.convert_result and result.convert_result.succeeded),
         "left_running": result.left_running,
@@ -441,7 +452,50 @@ def run(args: argparse.Namespace) -> int:
         print(f"  Would build cache at: {planned_cache_dir}")
         print(f"  Would run {len(trials)} drifting-grating trials")
         if camera_enabled:
+            preview_session = build_session_context(
+                PROTOCOL_NAME,
+                mouse_id_raw,
+                session_notes,
+                system_config.output_root,
+            )
+            preflight_command = camera_core.preflight_camera(
+                system_config.camera,
+                system_config.output_root,
+                dry_run=True,
+            )
+            start_command = camera_core.start_camera(
+                preview_session.mouse_id,
+                preview_session.session_id,
+                system_config.camera,
+                system_config.output_root,
+                dry_run=True,
+            )
+            stop_command = camera_core.stop_camera(
+                system_config.camera,
+                system_config.output_root,
+                dry_run=True,
+                ignore_errors=True,
+            )
+            fetch_command = camera_core.fetch_camera(
+                system_config.camera,
+                system_config.output_root,
+                dry_run=True,
+                skip_conversion=True,
+            )
+            convert_command = camera_core.convert_camera(
+                system_config.camera,
+                system_config.output_root,
+                dry_run=True,
+            )
             print(f"  Would start synchronous camera recording with baseline {baseline_minutes} minutes")
+            print("  Camera command order:")
+            print(f"    preflight: {_format_command(preflight_command.command)}")
+            print(f"    start: {_format_command(start_command.command)}")
+            print("    verify: performed inside remote_camera_control.py start after launch")
+            print(f"    stop: {_format_command(stop_command.command)}")
+            print(f"    wait: {CAMERA_SETTLING_SEC:.1f} sec")
+            print(f"    fetch: {_format_command(fetch_command.command)}")
+            print(f"    convert: {_format_command(convert_command.command)}")
         return 0
 
     camera_preflight_result = None
@@ -760,10 +814,10 @@ def run(args: argparse.Namespace) -> int:
         cleanup_stage = "camera_cleanup"
         if camera_started:
             if prompt_yes_no("Stop camera recording and fetch files now?", default_yes=False):
-                time.sleep(CAMERA_SETTLING_SEC)
                 camera_cleanup_result = camera_core.stop_and_fetch_camera(
                     system_config.camera,
                     system_config.output_root,
+                    settle_seconds=CAMERA_SETTLING_SEC,
                 )
                 if camera_cleanup_result.cleanup_error and cleanup_error is None:
                     cleanup_error = camera_cleanup_result.cleanup_error
@@ -792,8 +846,12 @@ def run(args: argparse.Namespace) -> int:
                 "start_requested_utc": camera_start_requested_utc,
                 "start_returned_utc": camera_start_returned_utc,
                 "start_verified": camera_start_verified,
+                "stop_requested": bool(camera_cleanup_result and camera_cleanup_result.stop_result is not None),
                 "stopped": bool(camera_cleanup_result and camera_cleanup_result.stop_result and camera_cleanup_result.stop_result.succeeded),
+                "settle_seconds": None if camera_cleanup_result is None else camera_cleanup_result.settle_seconds,
+                "fetch_requested": bool(camera_cleanup_result and camera_cleanup_result.fetch_result is not None),
                 "fetched": bool(camera_cleanup_result and camera_cleanup_result.fetch_result and camera_cleanup_result.fetch_result.succeeded),
+                "convert_requested": bool(camera_cleanup_result and camera_cleanup_result.convert_result is not None),
                 "conversion_attempted": bool(camera_cleanup_result and camera_cleanup_result.convert_result is not None),
                 "conversion_succeeded": bool(camera_cleanup_result and camera_cleanup_result.convert_result and camera_cleanup_result.convert_result.succeeded),
                 "cleanup_error": cleanup_error,
