@@ -13,8 +13,16 @@ class _FakeTiming:
         return {}
 
 
+class _FakeProgressReporter:
+    def __init__(self):
+        self.updates: list[dict[str, object]] = []
+
+    def update(self, **kwargs):
+        self.updates.append(kwargs)
+
+
 class RetinotopyRunnerTimingTests(unittest.TestCase):
-    def test_final_sweep_is_followed_by_inter_sweep_gray(self):
+    def test_final_sweep_is_followed_by_inter_sweep_gray_and_exact_eta_uses_final_gray(self):
         event_types: list[str] = []
         gray_durations: list[float] = []
         trials = [
@@ -56,6 +64,7 @@ class RetinotopyRunnerTimingTests(unittest.TestCase):
             refreshes_per_movement_frame=4,
             bar_width_fraction=0.1,
         )
+        progress_reporter = _FakeProgressReporter()
 
         def append_side_effect(_path, row, _fieldnames, fsync=False):
             del fsync
@@ -65,7 +74,7 @@ class RetinotopyRunnerTimingTests(unittest.TestCase):
 
         with patch.object(runner, "display_raw_with_timing", return_value=_FakeTiming()), patch.object(
             runner, "append_csv_row", side_effect=append_side_effect
-        ), patch.object(runner, "render_progress_line", return_value="progress"):
+        ), patch.object(runner.time, "monotonic", side_effect=[1.0, 2.0]):
             runner._playback_trials(
                 screen=object(),
                 trials=trials,
@@ -74,6 +83,10 @@ class RetinotopyRunnerTimingTests(unittest.TestCase):
                 loaded_inter_sweep=object(),
                 event_log_path=Path("/tmp/event_log.csv"),
                 config=config,
+                progress_reporter=progress_reporter,
+                playback_start_monotonic=0.0,
+                remaining_after_index=[6.0, 3.0, 0.0],
+                final_gray_sec=1.5,
             )
 
         self.assertEqual(
@@ -81,3 +94,20 @@ class RetinotopyRunnerTimingTests(unittest.TestCase):
             ["sweep_display", "inter_sweep_gray", "sweep_display", "inter_sweep_gray"],
         )
         self.assertEqual(gray_durations, [1.0, 1.0])
+        self.assertEqual(
+            progress_reporter.updates,
+            [
+                {
+                    "current_index": 1,
+                    "current_condition": "direction=left_to_right",
+                    "elapsed_seconds": 1.0,
+                    "remaining_seconds": 4.5,
+                },
+                {
+                    "current_index": 2,
+                    "current_condition": "direction=top_to_bottom",
+                    "elapsed_seconds": 2.0,
+                    "remaining_seconds": 1.5,
+                },
+            ],
+        )

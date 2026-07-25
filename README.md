@@ -71,6 +71,57 @@ Camera selection options:
 
 The camera-enabled path shows gray with a black photodiode patch before the synchronous camera start command is issued. The photodiode signal is the physical timing ground truth; software request/return timestamps are logged for reference only.
 
+After a camera-backed run, `Stop camera recording and fetch files now? [Y/n]:` defaults to yes. Enter `n` only if you intentionally want to leave the camera running for manual cleanup.
+
+## Default Protocol Durations
+
+The setup summary now reports the exact planned duration for the selected sequence before you confirm the run. Camera-enabled values below assume the default 3 minute prestim baseline and exclude camera stop/fetch/convert work after the visual protocol ends.
+
+### Drifting Gratings
+
+| Default setting | Value |
+| --- | --- |
+| Orientations | 8 |
+| Trials per orientation | 80 |
+| Total trials | 640 |
+| Stimulus duration per trial | 0.5 sec |
+| ITI duration per trial | 0.7 to 1.2 sec |
+| Initial gray | 3 sec |
+| Final gray | 3 sec |
+
+| Planned duration | Time |
+| --- | --- |
+| Minimum visual protocol duration | 12 min 54 sec |
+| Expected visual protocol duration | 15 min 34 sec |
+| Maximum visual protocol duration | 18 min 14 sec |
+| Expected camera-start-to-protocol-end duration with 3 min baseline | 18 min 31 sec |
+
+### Retinotopy
+
+| Mode | Total sweeps | Visual protocol duration | Camera-start-to-protocol-end duration with 3 min baseline |
+| --- | --- | --- | --- |
+| 2 directions | 40 | 16 min 46 sec | 19 min 43 sec |
+| 4 directions | 80 | 33 min 26 sec | 36 min 23 sec |
+
+## Runtime And Progress Display
+
+Before `Start this session`, the setup summary prints the exact planned sequence duration. Camera-enabled runs also print a nominal camera-start-to-protocol-end duration; that value excludes cleanup/transfer and can be extended if raw loading keeps the prestim gray on-screen longer than requested.
+
+Immediately before playback starts, the runner prints:
+
+- the planned stimulation or sweep-sequence duration
+- the final gray duration
+- the expected time until protocol completion
+- the estimated local completion timestamp
+
+During playback, the console uses a single-line ASCII progress bar:
+
+```text
+[##########----------] 320/640  50.0% orientation=90.0 elapsed 7:47 ETA 7:47
+```
+
+The ETA includes the final gray epoch but excludes camera stop/fetch/convert work. Updates happen only after a full stimulus+ITI epoch for drifting gratings or a full sweep+gray epoch for retinotopy, so default retinotopy progress advances once about every 25 seconds. In non-interactive output, each progress update is emitted on its own line.
+
 ## Cache And Sessions
 
 Persistent caches are stored under `/mnt/hd/vstim_cache/`.
@@ -94,7 +145,7 @@ Both protocols support:
 - `--dry-run`
 - `--test`
 
-`--preview-only` validates configuration, builds previews and trial plans, and reports duration, memory, and disk estimates without touching RPG or camera hardware.
+`--preview-only` validates configuration, builds previews and trial plans, and reports the exact planned protocol duration together with memory and disk estimates without touching RPG or camera hardware.
 
 If the configured persistent cache root is not writable on a development machine, preview artifacts are written under `.preview_cache/` in the repository instead.
 

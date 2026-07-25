@@ -63,3 +63,12 @@ def build_trial_sequence(
             }
         )
     return trials, resolved_seed
+
+
+def trial_epoch_durations_sec(
+    trials: list[dict[str, object]],
+) -> list[float]:
+    return [
+        float(trial["planned_stim_duration_sec"]) + float(trial["planned_iti_duration_sec"])
+        for trial in trials
+    ]

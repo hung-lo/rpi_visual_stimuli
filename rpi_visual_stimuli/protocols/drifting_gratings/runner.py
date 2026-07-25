@@ -10,6 +10,12 @@ from typing import Any, Optional
 
 from ...core import baseline as baseline_core
 from ...core import camera as camera_core
+from ...core.duration import (
+    ProtocolDurationSummary,
+    estimated_local_completion,
+    format_duration,
+    summarize_protocol_duration,
+)
 from ...core.cli import (
     build_common_parser,
     prompt_choice,
@@ -30,7 +36,7 @@ from ...core.metadata import (
     update_session_metadata,
 )
 from ...core.preflight import check_disk_space_before_build, check_memory_before_loading
-from ...core.progress import render_progress_line
+from ...core.progress import ProgressReporter
 from ...core.raw_cache import copy_manifest_to_session
 from ...core.rpg_display import display_raw_with_timing, import_rpg_or_raise, load_raws, open_screen
 from ...core.session import build_session_context, create_session_directories
@@ -56,7 +62,7 @@ from ..drifting_gratings.config import (
     build_test_config,
 )
 from ..drifting_gratings.events import EVENT_FIELDS
-from ..drifting_gratings.sequence import build_trial_sequence
+from ..drifting_gratings.sequence import build_trial_sequence, trial_epoch_durations_sec
 
 
 PROTOCOL_NAME = "drifting_gratings"
@@ -107,6 +113,7 @@ def _print_summary(
     trials: list[dict[str, object]],
     camera_enabled: bool,
     baseline_minutes: Optional[float],
+    duration_summary: ProtocolDurationSummary,
 ) -> None:
     print()
     print("Drifting gratings setup summary:")
@@ -127,6 +134,28 @@ def _print_summary(
         f"{system_config.screen.visible_height_cm} cm"
     )
     print(f"  Cache root: {cache_root_for_config(system_config, config)}")
+    print(
+        "  Exact planned trial-sequence duration: "
+        f"{_format_duration_with_seconds(duration_summary.trial_sequence_sec)}"
+    )
+    if camera_enabled:
+        print(
+            "  Visual protocol duration without camera baseline: "
+            f"{_format_duration_with_seconds(duration_summary.no_camera_protocol_sec)}"
+        )
+        print(
+            "  Nominal camera-start-to-protocol-end duration: "
+            f"{_format_duration_with_seconds(duration_summary.camera_start_to_protocol_end_nominal_sec or 0.0)}"
+        )
+        print(
+            "  Timing note: camera cleanup and file transfer are excluded; "
+            "raw loading can extend the baseline."
+        )
+    else:
+        print(
+            "  Exact planned visual protocol duration: "
+            f"{_format_duration_with_seconds(duration_summary.no_camera_protocol_sec)}"
+        )
 
 
 def _planned_sequence_rows(trials: list[dict[str, object]], cache_hash: str) -> list[dict[str, object]]:
@@ -164,6 +193,31 @@ def _write_preview_plan(cache_dir: Path, rows: list[dict[str, object]]) -> Path:
 
 def _format_command(command: tuple[str, ...]) -> str:
     return " ".join(shlex.quote(part) for part in command)
+
+
+def _format_duration_with_seconds(seconds: float) -> str:
+    return f"{format_duration(seconds)} ({seconds:.1f} sec)"
+
+
+def _remaining_suffix_sums(epoch_durations_sec: list[float]) -> list[float]:
+    remaining_after_index = [0.0] * (len(epoch_durations_sec) + 1)
+    for index in range(len(epoch_durations_sec) - 1, -1, -1):
+        remaining_after_index[index] = remaining_after_index[index + 1] + epoch_durations_sec[index]
+    return remaining_after_index
+
+
+def _print_playback_start_message(
+    *,
+    trial_sequence_sec: float,
+    final_gray_sec: float,
+) -> None:
+    remaining_seconds = trial_sequence_sec + final_gray_sec
+    completion = estimated_local_completion(remaining_seconds)
+    print("Starting drifting-grating stimulation.")
+    print(f"  Planned stimulation + ITI duration: {format_duration(trial_sequence_sec)}")
+    print(f"  Final gray: {format_duration(final_gray_sec)}")
+    print(f"  Expected time until protocol completion: {format_duration(remaining_seconds)}")
+    print(f"  Estimated completion: {completion.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
 
 def _resolve_preview_cache_dir(repo_root: Path, cache_dir: Path) -> tuple[Path, bool]:
@@ -222,6 +276,7 @@ def _initial_metadata(
     cache,
     preflight: dict[str, object],
     runtime_environment: dict[str, object],
+    duration_summary: ProtocolDurationSummary,
 ) -> dict[str, object]:
     provenance = read_source_provenance(repo_root / "docs" / "SOURCE_PROVENANCE.md")
     return {
@@ -291,6 +346,13 @@ def _initial_metadata(
             **runtime_environment,
             "system_config_path": str(system_config_path.resolve()),
         },
+        "planned_duration": {
+            **duration_summary.to_dict(),
+            "camera_duration_note": (
+                "Nominal value excludes camera cleanup, transfer, conversion, and baseline "
+                "extension caused by raw loading."
+            ),
+        },
         "raw_cache_screen_compatibility_fallback": RAW_CACHE_SCREEN_COMPATIBILITY_FALLBACK,
         "timing_note": (
             "The request timestamp is the Raspberry Pi software request immediately before "
@@ -309,10 +371,12 @@ def _playback_trials(
     loaded_gray,
     *,
     event_log_path: Path,
+    progress_reporter: ProgressReporter,
+    playback_start_monotonic: float,
+    remaining_after_index: list[float],
+    final_gray_sec: float,
     gpio_controller=None,
 ) -> None:
-    start_monotonic = time.monotonic()
-    total_trials = len(trials)
     for index, trial in enumerate(trials, start=1):
         stim_raw = loaded_stimuli[trial["grating_raw_key"]]
         if gpio_controller is not None:
@@ -360,16 +424,11 @@ def _playback_trials(
             },
             EVENT_FIELDS,
         )
-        elapsed = time.monotonic() - start_monotonic
-        remaining = [float(item["planned_stim_duration_sec"]) + float(item["planned_iti_duration_sec"]) for item in trials[index:]]
-        print(
-            render_progress_line(
-                current_index=index,
-                total_count=total_trials,
-                current_condition=f"orientation={trial['bar_orientation_deg']}",
-                elapsed_seconds=elapsed,
-                remaining_durations_seconds=remaining,
-            )
+        progress_reporter.update(
+            current_index=index,
+            current_condition=f"orientation={trial['bar_orientation_deg']}",
+            elapsed_seconds=time.monotonic() - playback_start_monotonic,
+            remaining_seconds=remaining_after_index[index] + final_gray_sec,
         )
 
 
@@ -420,10 +479,18 @@ def run(args: argparse.Namespace) -> int:
         )
     config, _ = _prompt_protocol_config(system_config, test_mode=args.test)
     trials, resolved_seed = build_trial_sequence(system_config, config)
+    trial_epoch_seconds = trial_epoch_durations_sec(trials)
+    duration_summary = summarize_protocol_duration(
+        trial_epoch_durations_sec=trial_epoch_seconds,
+        initial_gray_sec=config.initial_gray_sec,
+        final_gray_sec=config.final_gray_sec,
+        camera_enabled=camera_enabled,
+        baseline_minutes=baseline_minutes,
+    )
     iti_frame_counts = {int(trial["iti_frames"]) for trial in trials}
     planned_cache_dir = cache_root_for_config(system_config, config)
     planned_rows = _planned_sequence_rows(trials, planned_cache_dir.name)
-    _print_summary(system_config, config, trials, camera_enabled, baseline_minutes)
+    _print_summary(system_config, config, trials, camera_enabled, baseline_minutes, duration_summary)
 
     estimated_disk_bytes = approximate_stimulus_bytes(system_config, config)
     if args.preview_only:
@@ -509,7 +576,14 @@ def run(args: argparse.Namespace) -> int:
             print(f"Camera mode update: {camera_preflight_note}")
             if not camera_enabled:
                 baseline_minutes = None
-        _print_summary(system_config, config, trials, camera_enabled, baseline_minutes)
+        duration_summary = summarize_protocol_duration(
+            trial_epoch_durations_sec=trial_epoch_seconds,
+            initial_gray_sec=config.initial_gray_sec,
+            final_gray_sec=config.final_gray_sec,
+            camera_enabled=camera_enabled,
+            baseline_minutes=baseline_minutes,
+        )
+        _print_summary(system_config, config, trials, camera_enabled, baseline_minutes, duration_summary)
 
     if not args.build_cache_only:
         if not prompt_yes_no("Start this session", default_yes=True):
@@ -576,6 +650,7 @@ def run(args: argparse.Namespace) -> int:
             system_config_path,
             rpg_module=rpg,
         ),
+        duration_summary=duration_summary,
     )
     update_session_metadata(session.metadata_path, initial_metadata)
 
@@ -598,6 +673,7 @@ def run(args: argparse.Namespace) -> int:
     raw_loading_duration_sec = None
     camera_left_running = False
     gpio_controller = None
+    progress_reporter = None
     try:
         baseline_gray = get_baseline_gray_raw(
             cache.cache_dir / "gray",
@@ -752,6 +828,18 @@ def run(args: argparse.Namespace) -> int:
                     gray_remaining_at_gate_entry=0.0,
                     waited_for_minimum_gray_after_override=False,
                 )
+            _print_playback_start_message(
+                trial_sequence_sec=duration_summary.trial_sequence_sec,
+                final_gray_sec=config.final_gray_sec,
+            )
+            progress_reporter = ProgressReporter(total_count=len(trials))
+            playback_start_monotonic = time.monotonic()
+            progress_reporter.update(
+                current_index=0,
+                current_condition="waiting_for_first_trial",
+                elapsed_seconds=0.0,
+                remaining_seconds=duration_summary.trial_sequence_sec + config.final_gray_sec,
+            )
             append_csv_row(session.event_log_path, {"event_type": "session_start", "cache_hash": cache.cache_hash}, EVENT_FIELDS)
             current_stage = "playback"
             _playback_trials(
@@ -762,6 +850,10 @@ def run(args: argparse.Namespace) -> int:
                 loaded_stimuli,
                 {int(key): value for key, value in loaded_gray.items()},
                 event_log_path=session.event_log_path,
+                progress_reporter=progress_reporter,
+                playback_start_monotonic=playback_start_monotonic,
+                remaining_after_index=_remaining_suffix_sums(trial_epoch_seconds),
+                final_gray_sec=config.final_gray_sec,
                 gpio_controller=gpio_controller,
             )
             current_stage = "final_gray"
@@ -777,6 +869,13 @@ def run(args: argparse.Namespace) -> int:
                 },
                 EVENT_FIELDS,
             )
+            if progress_reporter is not None:
+                progress_reporter.update(
+                    current_index=len(trials),
+                    current_condition="final_gray",
+                    elapsed_seconds=time.monotonic() - playback_start_monotonic,
+                    remaining_seconds=0.0,
+                )
             append_csv_row(session.event_log_path, {"event_type": "session_end", "cache_hash": cache.cache_hash}, EVENT_FIELDS)
             session_completed = True
             session_end_logged = True
@@ -803,6 +902,8 @@ def run(args: argparse.Namespace) -> int:
             )
             session_end_logged = True
     finally:
+        if progress_reporter is not None:
+            progress_reporter.finish()
         baseline_core.stop_early_start_monitor(baseline_monitor)
         cleanup_stage = "gpio_cleanup"
         if gpio_controller is not None:
@@ -813,7 +914,7 @@ def run(args: argparse.Namespace) -> int:
                 cleanup_error = f"{type(exc).__name__}: {exc}"
         cleanup_stage = "camera_cleanup"
         if camera_started:
-            if prompt_yes_no("Stop camera recording and fetch files now?", default_yes=False):
+            if prompt_yes_no("Stop camera recording and fetch files now?", default_yes=True):
                 camera_cleanup_result = camera_core.stop_and_fetch_camera(
                     system_config.camera,
                     system_config.output_root,
