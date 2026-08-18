@@ -153,7 +153,7 @@ If the configured persistent cache root is not writable on a development machine
 
 `--dry-run` validates prompts, sequence planning, and intended commands without hardware side effects.
 
-For Box hardware RPG investigation, retinotopy also supports `--test-rpg-return`. With a short test configuration, `python3 run_retinotopy.py --test --no-camera --test-rpg-return` displays one cached sweep and prints the bounded `display_raw()` return type, representation, and recognized timing fields. This is a hardware diagnostic and is not part of normal CI.
+For Box hardware RPG investigation, both protocols support `--test-rpg-return`. Use `python3 run_retinotopy.py --test --no-camera --test-rpg-return` or `python3 run_drifting_gratings.py --test --no-camera --test-rpg-return` to display one cached raw and print the bounded `display_raw()` return type, representation, and recognized timing fields. The drifting-gratings diagnostic automatically uses test-mode parameters, avoids session creation, and rejects `--camera`. These are hardware diagnostics and are not part of normal CI.
 
 The event log keeps software request/return timestamps separate from RPG-reported performance fields. An interrupted blocking `display_raw()` call may have been physically presented without a completed event row; the photodiode remains the physical display-timing ground truth.
 

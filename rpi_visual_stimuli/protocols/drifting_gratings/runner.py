@@ -43,7 +43,13 @@ from ...core.preflight import (
 )
 from ...core.progress import ProgressReporter
 from ...core.raw_cache import copy_manifest_to_session
-from ...core.rpg_display import display_raw_with_timing, import_rpg_or_raise, load_raws, open_screen
+from ...core.rpg_display import (
+    diagnose_rpg_display_return,
+    display_raw_with_timing,
+    import_rpg_or_raise,
+    load_raws,
+    open_screen,
+)
 from ...core.session import build_session_context, create_session_directories
 from ...core.timestamps import utc_iso_now
 from ..drifting_gratings.cache import (
@@ -67,7 +73,11 @@ from ..drifting_gratings.config import (
     build_test_config,
 )
 from ..drifting_gratings.events import EVENT_FIELDS
-from ..drifting_gratings.sequence import build_trial_sequence, trial_epoch_durations_sec
+from ..drifting_gratings.sequence import (
+    build_trial_sequence,
+    format_orientation_stem,
+    trial_epoch_durations_sec,
+)
 
 
 PROTOCOL_NAME = "drifting_gratings"
@@ -76,7 +86,16 @@ RAW_CACHE_SCREEN_COMPATIBILITY_FALLBACK = True
 
 
 def build_parser() -> argparse.ArgumentParser:
-    return build_common_parser("Run the orientation drifting gratings protocol.")
+    parser = build_common_parser("Run the orientation drifting gratings protocol.")
+    parser.add_argument(
+        "--test-rpg-return",
+        action="store_true",
+        help=(
+            "Display one representative drifting-grating raw, print the raw RPG "
+            "return object and parsed timing fields, then exit."
+        ),
+    )
+    return parser
 
 
 def _prompt_protocol_config(system_config: SystemConfig, *, test_mode: bool) -> tuple[Any, int]:
@@ -487,9 +506,16 @@ def run(args: argparse.Namespace) -> int:
     repo_root = Path(__file__).resolve().parents[3]
     system_config_path = Path(args.system_config)
     system_config = load_system_config(system_config_path)
-    mouse_id_raw = prompt_text("Mouse ID: ")
-    session_notes = prompt_text("Session notes, optional: ")
-    camera_requested = False if args.preview_only or args.build_cache_only else resolve_camera_enabled(args)
+    diagnostic_mode = bool(args.test_rpg_return)
+    if diagnostic_mode and args.camera:
+        raise ValueError("--test-rpg-return is a no-camera hardware diagnostic. Use --no-camera.")
+    mouse_id_raw = "" if diagnostic_mode else prompt_text("Mouse ID: ")
+    session_notes = "" if diagnostic_mode else prompt_text("Session notes, optional: ")
+    camera_requested = (
+        False
+        if args.preview_only or args.build_cache_only or diagnostic_mode
+        else resolve_camera_enabled(args)
+    )
     camera_enabled = camera_requested
     baseline_minutes = None
     if camera_enabled:
@@ -497,7 +523,7 @@ def run(args: argparse.Namespace) -> int:
             "Camera baseline minutes",
             default=system_config.camera.default_prestim_baseline_minutes,
         )
-    config, _ = _prompt_protocol_config(system_config, test_mode=args.test)
+    config, _ = _prompt_protocol_config(system_config, test_mode=args.test or diagnostic_mode)
     trials, resolved_seed = build_trial_sequence(system_config, config)
     trial_epoch_seconds = trial_epoch_durations_sec(trials)
     duration_summary = summarize_protocol_duration(
@@ -642,6 +668,23 @@ def run(args: argparse.Namespace) -> int:
         iti_frame_counts=iti_frame_counts,
         convert_raw_fn=rpg.convert_raw,
     )
+    if diagnostic_mode:
+        orientation_id = 1
+        bar_orientation_deg = config.orientations_deg[0]
+        raw_key = format_orientation_stem(orientation_id, bar_orientation_deg)
+        raw_path = cache.stimulus_paths[raw_key]
+        planned_duration_sec = config.stimulus_frame_count / system_config.screen.refresh_rate_hz
+        print()
+        print("Drifting-gratings RPG return diagnostic:")
+        print(f"  Orientation ID: {orientation_id}")
+        print(f"  Bar orientation: {bar_orientation_deg} deg")
+        print(f"  Raw path: {raw_path}")
+        print(f"  Stimulus frame count: {config.stimulus_frame_count}")
+        print(f"  Planned duration: {planned_duration_sec:.6f} sec")
+        with open_screen(system_config) as screen:
+            loaded_raw = screen.load_raw(str(raw_path))
+            diagnose_rpg_display_return(screen, loaded_raw)
+        return 0
     if args.build_cache_only:
         print(f"Cache built: {cache.cache_dir}")
         print(f"Manifest: {cache.manifest_path}")
