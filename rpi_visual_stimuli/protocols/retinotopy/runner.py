@@ -35,7 +35,11 @@ from ...core.metadata import (
     read_source_provenance,
     update_session_metadata,
 )
-from ...core.preflight import check_disk_space_before_build, check_memory_before_loading
+from ...core.preflight import (
+    check_disk_space_before_build,
+    check_memory_before_loading,
+    require_expected_mount,
+)
 from ...core.progress import ProgressReporter
 from ...core.raw_cache import copy_manifest_to_session
 from ...core.rpg_display import display_raw_with_timing, import_rpg_or_raise, load_raws, open_screen
@@ -566,6 +570,7 @@ def run(args: argparse.Namespace) -> int:
 
     peak_build_bytes = approximate_build_peak_bytes(system_config, config)
     rpg = import_rpg_or_raise()
+    require_expected_mount(system_config.output_root)
     check_disk_space_before_build(
         planned_cache_dir,
         required_bytes=peak_build_bytes,

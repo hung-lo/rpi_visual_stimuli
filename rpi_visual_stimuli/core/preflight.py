@@ -50,6 +50,29 @@ def _coerce_file_size(item: Union[int, str, Path]) -> int:
     return Path(item).stat().st_size
 
 
+def nearest_existing_ancestor(path: Union[str, Path]) -> Path:
+    candidate = Path(path)
+    while not candidate.exists():
+        parent = candidate.parent
+        if parent == candidate:
+            raise FileNotFoundError(
+                "No existing ancestor found for target path: {}".format(path)
+            )
+        candidate = parent
+    return candidate
+
+
+def require_expected_mount(path: Union[str, Path]) -> None:
+    expected_mount = Path(path)
+    if expected_mount.is_mount():
+        return
+    raise RuntimeError(
+        "Configured output root {} is not an active mount point. "
+        "Refusing to build visual-stimulus cache on the system filesystem. "
+        "Mount the experiment drive and retry.".format(expected_mount)
+    )
+
+
 @dataclass(frozen=True)
 class MemoryCheckResult:
     total_memory_bytes: Optional[int]
@@ -118,9 +141,11 @@ def check_memory_before_loading(
 @dataclass(frozen=True)
 class DiskCheckResult:
     target_path: Path
+    disk_check_path: Path
     free_bytes: int
     required_bytes: int
     margin_bytes: int
+    required_total_bytes: int
     shortfall_bytes: int
 
 
@@ -131,21 +156,35 @@ def check_disk_space_before_build(
     margin_bytes: int = 0,
 ) -> DiskCheckResult:
     path = Path(target_path)
-    usage = shutil.disk_usage(path if path.exists() else path.parent)
+    disk_check_path = nearest_existing_ancestor(path)
+    usage = shutil.disk_usage(str(disk_check_path))
     free_bytes = usage.free if hasattr(usage, "free") else usage[2]
+    required_bytes = int(required_bytes)
+    margin_bytes = int(margin_bytes)
     total_required = required_bytes + margin_bytes
     shortfall = max(0, total_required - free_bytes)
     result = DiskCheckResult(
         target_path=path,
+        disk_check_path=disk_check_path,
         free_bytes=free_bytes,
         required_bytes=required_bytes,
         margin_bytes=margin_bytes,
+        required_total_bytes=total_required,
         shortfall_bytes=shortfall,
     )
     if shortfall > 0:
         raise OSError(
-            "Insufficient disk space: "
-            f"free={format_bytes(free_bytes)}, required={format_bytes(required_bytes)}, "
-            f"margin={format_bytes(margin_bytes)}, shortfall={format_bytes(shortfall)}."
+            "Insufficient free disk space for cache build. "
+            "Disk checked at: {}. "
+            "Free: {} bytes. "
+            "Required build bytes: {}. "
+            "Safety margin: {}. "
+            "Shortfall: {} bytes.".format(
+                disk_check_path,
+                free_bytes,
+                required_bytes,
+                margin_bytes,
+                shortfall,
+            )
         )
     return result
