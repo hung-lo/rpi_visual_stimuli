@@ -35,6 +35,8 @@ CAMERA_FRAMERATE = 30
 DEFAULT_VERIFY_WAIT_SEC = 1.5
 SSH_CONNECT_TIMEOUT_SEC = 5
 SSH_COMMAND_TIMEOUT_SEC = 15.0
+RSYNC_IO_TIMEOUT_SEC = 60
+RSYNC_COMMAND_TIMEOUT_SEC = 3600.0
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 STATE_FILE = LOCAL_VIDEO_ROOT / ".rpi_visual_stimuli_camera_session.json"
@@ -149,11 +151,10 @@ def run_rsync(
     dry_run: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     local_dir.mkdir(parents=True, exist_ok=True)
-    cmd = ["rsync", "-av", "--progress"]
-    if remove_source_files:
-        cmd.append("--remove-source-files")
+    cmd = ["rsync", "-av", "--progress", f"--timeout={RSYNC_IO_TIMEOUT_SEC}"]
     cmd.extend([f"{camera_host}:{remote_dir.rstrip('/')}/", str(local_dir) + "/"])
-    return run_cmd(cmd, check=True, dry_run=dry_run)
+    cmd[1:1] = ["-e", f"ssh -o BatchMode=yes -o ConnectTimeout={SSH_CONNECT_TIMEOUT_SEC}"]
+    return run_cmd(cmd, check=True, dry_run=dry_run, timeout_sec=RSYNC_COMMAND_TIMEOUT_SEC)
 
 
 def convert_h264_to_mp4(
@@ -220,17 +221,33 @@ def append_event(local_video_dir: Path, event: str, details: Optional[dict[str, 
 
 
 def save_state(state: dict[str, object]) -> None:
-    Path(state["state_file_path"]).parent.mkdir(parents=True, exist_ok=True)
-    Path(state["state_file_path"]).write_text(
-        json.dumps(state, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    print(f"Saved state: {state['state_file_path']}")
+    state_path = Path(state["state_file_path"])
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = (json.dumps(state, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    temp_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", dir=state_path.parent,
+                                         prefix=f".{state_path.name}.", suffix=".tmp", delete=False) as handle:
+            temp_path = Path(handle.name)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, state_path)
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
+    print(f"Saved state: {state_path}")
 
 
 def load_state(*, allow_legacy_state: bool = False) -> dict[str, object]:
     if STATE_FILE.exists():
-        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        try:
+            state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CameraControlError(
+                f"Camera state at {STATE_FILE} is unreadable or corrupt ({exc}). "
+                "The file was retained; use explicit stop-recovery to stop a running acquisition."
+            ) from exc
         state.setdefault("state_file_path", str(STATE_FILE))
         return state
     if allow_legacy_state and LEGACY_STATE_FILE.exists():
@@ -511,6 +528,12 @@ def start_camera(args) -> int:
 
     state = {
         "created_utc": utc_iso_now(),
+        "status": "starting",
+        "launch_attempted": False,
+        "launch_verified": False,
+        "rollback_attempted": False,
+        "rollback_succeeded": None,
+        "rollback_error": None,
         "camera_host": preflight["camera_host"],
         "framerate": args.framerate,
         "remote_camera_repo": preflight["remote_repo"],
@@ -518,9 +541,12 @@ def start_camera(args) -> int:
         "remote_camera_stop": preflight["remote_stop"],
         **make_session_paths(args),
     }
+    state["remote_output_path"] = state["remote_base_path"]
     local_video_dir = Path(state["local_video_dir"])
     local_video_dir.mkdir(parents=True, exist_ok=True)
     append_event(local_video_dir, "camera_start_requested", state)
+    if not args.dry_run:
+        save_state(state)
     remote_log = f"{state['remote_video_dir']}/camera_acquisition.log"
     launch_cmd = (
         f"mkdir -p {shlex.quote(state['remote_video_dir'])} && "
@@ -529,50 +555,89 @@ def start_camera(args) -> int:
         f"{shlex.quote(state['remote_base_path'])} {int(args.framerate)} "
         f">> {shlex.quote(remote_log)} 2>&1 &"
     )
-    run_ssh(
-        str(state["camera_host"]),
-        launch_cmd,
-        dry_run=args.dry_run,
-        batch_mode=True,
-        connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
-        command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
-    )
+    state["launch_attempted"] = True
+    if not args.dry_run:
+        save_state(state)
+    try:
+        run_ssh(
+            str(state["camera_host"]), launch_cmd, dry_run=args.dry_run, batch_mode=True,
+            connect_timeout=SSH_CONNECT_TIMEOUT_SEC, command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
+        )
+    except Exception as exc:
+        state.update(status="launch_failed", launch_error=f"{type(exc).__name__}: {exc}")
+        if not args.dry_run:
+            save_state(state)
+        raise CameraControlError(f"Camera launch failed before verification: {exc}") from exc
+    state.update(status="launched", launch_attempted=True)
+    if not args.dry_run:
+        save_state(state)
     if not args.dry_run:
         time.sleep(float(args.verify_wait_sec))
-    acquisition = _query_remote_acquisition(
-        str(state["camera_host"]),
-        str(state["remote_camera_start"]),
-        dry_run=args.dry_run,
-        batch_mode=True,
-        connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
-        command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
-    )
-    verify_cmd = (
-        f"test -d {shlex.quote(state['remote_session_dir'])} && "
-        f"test -d {shlex.quote(state['remote_video_dir'])} && "
-        "echo camera_start_verified"
-    )
-    verify = run_ssh(
-        str(state["camera_host"]),
-        verify_cmd,
-        check=False,
-        dry_run=args.dry_run,
-        batch_mode=True,
-        connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
-        command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
-        quiet=True,
-    )
-    if not args.dry_run:
+    verification_error = None
+    acquisition = {"running": False, "lines": []}
+    verify = subprocess.CompletedProcess([], 1, "", "")
+    try:
+        acquisition = _query_remote_acquisition(
+            str(state["camera_host"]), str(state["remote_camera_start"]),
+            dry_run=args.dry_run, batch_mode=True, connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+            command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
+        )
+        verify_cmd = (
+            f"test -d {shlex.quote(state['remote_session_dir'])} && "
+            f"test -d {shlex.quote(state['remote_video_dir'])} && "
+            "echo camera_start_verified"
+        )
+        verify = run_ssh(
+            str(state["camera_host"]), verify_cmd, check=False, dry_run=args.dry_run,
+            batch_mode=True, connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+            command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC, quiet=True,
+        )
+    except Exception as exc:
+        verification_error = f"post-launch verification command failed: {exc}"
+    if not args.dry_run and verification_error is None:
         if not acquisition["running"]:
-            raise CameraControlError(
-                "Camera start command returned, but the acquisition process was not alive after verification."
+            verification_error = "the acquisition process was not alive after verification"
+        elif verify.returncode != 0 or "camera_start_verified" not in verify.stdout:
+            verification_error = "the expected remote session directories were not verified"
+    if verification_error:
+        state.update(status="verification_failed", launch_verified=False, rollback_attempted=True)
+        if not args.dry_run:
+            save_state(state)
+        try:
+            rollback = run_ssh(
+                str(state["camera_host"]), f"bash {shlex.quote(str(state['remote_camera_stop']))}",
+                check=False, batch_mode=True, connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+                command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC, quiet=True,
             )
-        if verify.returncode != 0 or "camera_start_verified" not in verify.stdout:
-            raise CameraControlError(
-                "Camera acquisition process started, but the expected remote session directories were not verified."
+            after = _query_remote_acquisition(
+                str(state["camera_host"]), str(state["remote_camera_start"]),
+                batch_mode=True, connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+                command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
             )
+            succeeded = rollback.returncode == 0 and not after["running"]
+            state.update(rollback_succeeded=succeeded,
+                         rollback_error=None if succeeded else (rollback.stderr or "acquisition still running after rollback"),
+                         rollback_process_lines=after["lines"])
+            if not args.dry_run:
+                save_state(state)
+            if not succeeded:
+                raise CameraControlError(
+                    f"Camera startup verification failed ({verification_error}); rollback did not stop acquisition. "
+                    f"Recovery state retained at {state['state_file_path']}."
+                )
+        except CameraControlError:
+            raise
+        except Exception as exc:
+            state.update(rollback_succeeded=False, rollback_error=f"{type(exc).__name__}: {exc}")
+            if not args.dry_run:
+                save_state(state)
+            raise CameraControlError(
+                f"Camera startup verification failed ({verification_error}); rollback failed: {exc}. "
+                f"Recovery state retained at {state['state_file_path']}."
+            ) from exc
+        raise CameraControlError(f"Camera startup verification failed ({verification_error}); rollback succeeded.")
 
-    state["start_verified_utc"] = utc_iso_now()
+    state.update(status="recording", launch_verified=True, start_verified_utc=utc_iso_now())
     state["acquisition_status_lines"] = acquisition["lines"]
     append_event(
         local_video_dir,
@@ -584,7 +649,8 @@ def start_camera(args) -> int:
             "remote_video_dir": state["remote_video_dir"],
         },
     )
-    save_state(state)
+    if not args.dry_run:
+        save_state(state)
     print("Camera start command verified.")
     print(f"Camera host:        {state['camera_host']}")
     print(f"Remote session dir: {state['remote_session_dir']}")
@@ -610,6 +676,40 @@ def stop_camera(args, state: Optional[dict[str, object]] = None) -> int:
     )
     append_event(local_video_dir, "camera_stop_returned", {"camera_host": camera_host})
     print("Camera stop command sent.")
+    return 0
+
+
+def stop_camera_recovery(args) -> int:
+    camera_host = resolve_camera_host(args)
+    remote_start = resolve_remote_start(args)
+    acquisition = _query_remote_acquisition(
+        camera_host, remote_start, dry_run=args.dry_run, batch_mode=True,
+        connect_timeout=SSH_CONNECT_TIMEOUT_SEC, command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
+    )
+    lines = acquisition["lines"]
+    if len(lines) != 1:
+        if not lines:
+            raise CameraControlError("Recovery stop refused: no matching camera acquisition is running.")
+        raise CameraControlError("Recovery stop refused: multiple matching camera processes were found; refusing to kill ambiguously.")
+    identified = lines[0]
+    result = run_ssh(
+        camera_host, f"bash {shlex.quote(resolve_remote_stop(args))}", check=False,
+        dry_run=args.dry_run, batch_mode=True, connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+        command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
+    )
+    after = _query_remote_acquisition(
+        camera_host, remote_start, dry_run=args.dry_run, batch_mode=True,
+        connect_timeout=SSH_CONNECT_TIMEOUT_SEC, command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC,
+    )
+    recovery_dir = resolve_local_output_root(args) / "camera_recovery"
+    append_event(recovery_dir, "camera_recovery_stop", {
+        "camera_host": camera_host, "remote_start": remote_start,
+        "identified_process": identified, "stop_returncode": result.returncode,
+        "stopped": not after["running"],
+    })
+    if result.returncode != 0 or after["running"]:
+        raise CameraControlError("Recovery stop failed or the matching acquisition is still running; recovery record retained.")
+    print(f"Recovery stop verified for process: {identified}")
     return 0
 
 
@@ -690,6 +790,13 @@ def fetch_camera(args, state: Optional[dict[str, object]] = None) -> int:
         remove_source_files=not args.keep_source_files,
         dry_run=args.dry_run,
     )
+    if not args.keep_source_files:
+        run_ssh(
+            camera_host,
+            f"find {shlex.quote(remote_video_dir)} -maxdepth 1 -type f -name '*.h264' -delete",
+            batch_mode=True, connect_timeout=SSH_CONNECT_TIMEOUT_SEC,
+            command_timeout_sec=SSH_COMMAND_TIMEOUT_SEC, dry_run=args.dry_run, quiet=True,
+        )
     append_event(
         local_video_dir,
         "camera_fetch_returned",
@@ -795,6 +902,11 @@ def build_parser() -> argparse.ArgumentParser:
     stop.add_argument("--remote-stop", "--remote-camera-stop", dest="remote_camera_stop", default=REMOTE_CAMERA_STOP)
     stop.add_argument("--ignore-stop-errors", action="store_true", default=False)
     stop.set_defaults(func=stop_camera)
+
+    recovery = sub.add_parser("stop-recovery", parents=[common], help="Explicitly stop one matching acquisition without local state.")
+    recovery.add_argument("--remote-start", "--remote-camera-start", dest="remote_camera_start", default=REMOTE_CAMERA_START)
+    recovery.add_argument("--remote-stop", "--remote-camera-stop", dest="remote_camera_stop", default=REMOTE_CAMERA_STOP)
+    recovery.set_defaults(func=stop_camera_recovery)
 
     fetch = sub.add_parser("fetch", parents=[common], help="Fetch last remote camera files with rsync.")
     fetch.add_argument("--mouse-id", default=None, help="Mouse ID if no saved session state exists yet.")

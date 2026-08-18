@@ -31,7 +31,8 @@ Follow these stages in order before animal use.
 ## Stage D: RPG Timing
 
 - If RPG timing fields are blank, run `python3 run_retinotopy.py --test --no-camera --test-rpg-return` and compare the reported return shape with the deployed Box RPG installation.
-- Confirm mean interframe duration is near `16666.7 us` at 60 Hz.
+- For drifting gratings, confirm the mean RPG source-frame interval is near `16666.7 us` at the nominal 60-Hz movie-frame rate.
+- For retinotopy, expect a source-frame interval near `66666.7 us` because the protocol uses a 15-Hz movement rate with four display refreshes per movement frame. Do not apply the drifting-grating 60-Hz expectation to retinotopy.
 - Confirm the standard deviation is low.
 - Confirm `display_raw()` call duration is close to the planned raw duration.
 - Confirm playback looks smooth and free of obvious judder.
@@ -88,3 +89,11 @@ Drifting-grating pilot:
 ```
 
 Inspect memory usage, temperature or throttling, timing logs, photodiode traces, camera duration, and metadata completeness before animal use.
+
+## Box 151 timing and deployment notes
+
+The observed Box 151 diagnostics were approximately `67064 us` mean interframe for retinotopy and `17257 us` for the short drifting-gratings diagnostic. These are consistent with the protocol targets above; longer runs and photodiode traces are more informative than a short sample.
+
+RPG `start_time` is an integer-second Unix timestamp in the deployed Box 151 RPG. Event metadata therefore also records `display_request_unix_ns` and `display_return_unix_ns` as high-resolution software timestamps. The photodiode transition remains the physical display-timing ground truth.
+
+Run `scripts/box151_smoke_test.sh` on Box 151 after deployment. It performs compile/import/help checks without upgrading the system Python; Box 151 remains the authoritative deployment validation environment.

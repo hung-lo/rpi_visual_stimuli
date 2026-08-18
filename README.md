@@ -157,6 +157,12 @@ For Box hardware RPG investigation, both protocols support `--test-rpg-return`. 
 
 The event log keeps software request/return timestamps separate from RPG-reported performance fields. An interrupted blocking `display_raw()` call may have been physically presented without a completed event row; the photodiode remains the physical display-timing ground truth.
 
+## Box 151 Hardware Timing
+
+Retinotopy targets an RPG source-frame interval of about `66.7 ms` (15-Hz movement rate with four display refreshes per movement frame). Drifting gratings target about `16.7 ms` at a 60-Hz movie-frame rate. On Box 151, RPG `start_time` is integer-second Unix time; nanosecond software request/return timestamps are logged separately, and the photodiode remains the physical display-timing ground truth.
+
+Use `scripts/box151_smoke_test.sh` for repeatable post-deployment compile, import, and CLI-help checks.
+
 ## Manual Camera Cleanup
 
 If a run leaves the camera recording, the manual cleanup command is:

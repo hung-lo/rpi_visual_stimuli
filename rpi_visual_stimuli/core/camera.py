@@ -170,6 +170,22 @@ def stop_camera(
     return _run_camera_command(*arguments, check=not ignore_errors, dry_run=dry_run)
 
 
+def stop_camera_recovery(
+    camera_config: CameraConfig,
+    local_output_root: Union[str, Path],
+    *,
+    dry_run: bool = False,
+) -> CameraCommandResult:
+    return _run_camera_command(
+        "stop-recovery",
+        "--remote-start", camera_config.remote_start,
+        "--remote-stop", camera_config.remote_stop,
+        *_base_arguments(camera_config, local_output_root),
+        check=True,
+        dry_run=dry_run,
+    )
+
+
 def fetch_camera(
     camera_config: CameraConfig,
     local_output_root: Union[str, Path],

@@ -291,7 +291,14 @@ def _resolve_camera_preflight(
             raise RuntimeError("Camera preflight aborted because Box 152 is already recording.")
         if choice == "no-camera":
             return False, result, "continued_without_camera_after_existing_acquisition"
-        camera_core.stop_camera(system_config.camera, system_config.output_root)
+        try:
+            camera_core.stop_camera(system_config.camera, system_config.output_root)
+        except RuntimeError as exc:
+            # A corrupt, missing, or stale state file must not make the explicit
+            # operator recovery choice ineffective.  Recovery is deliberately
+            # separate and verifies one unambiguous matching process.
+            print(f"Stateful camera stop unavailable; attempting explicit recovery stop: {exc}")
+            camera_core.stop_camera_recovery(system_config.camera, system_config.output_root)
         retry = camera_core.preflight_camera(system_config.camera, system_config.output_root)
         if retry.returncode != 0:
             raise RuntimeError(retry.stderr or retry.stdout or "Camera preflight still failed after stopping the existing acquisition.")
