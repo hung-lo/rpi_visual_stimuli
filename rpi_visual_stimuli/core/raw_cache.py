@@ -51,14 +51,36 @@ def load_manifest(cache_dir: Union[str, Path]) -> dict[str, Any]:
     return json.loads(manifest_path.read_text(encoding="utf-8"))
 
 
-def validate_cache(cache_dir: Union[str, Path], *, require_checksums: bool = False) -> CacheValidationResult:
+def validate_cache(
+    cache_dir: Union[str, Path],
+    *,
+    require_checksums: bool = False,
+    expected_cache_hash: Optional[str] = None,
+) -> CacheValidationResult:
     cache_path = Path(cache_dir)
     manifest_path = cache_path / MANIFEST_FILENAME
     if not manifest_path.exists():
         return CacheValidationResult(False, cache_path, None, "missing manifest")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("cache_hash") and manifest["cache_hash"] != cache_path.name:
-        return CacheValidationResult(False, cache_path, manifest, "manifest hash does not match directory name")
+    manifest_cache_hash = manifest.get("cache_hash")
+    if manifest_cache_hash:
+        hash_to_validate = cache_path.name if expected_cache_hash is None else str(expected_cache_hash)
+        if manifest_cache_hash != hash_to_validate:
+            if expected_cache_hash is None:
+                reason = (
+                    "Final cache manifest hash does not match canonical directory name: "
+                    "manifest={!r}, directory={!r}".format(manifest_cache_hash, cache_path.name)
+                )
+            else:
+                reason = (
+                    "Staging cache manifest hash does not match expected canonical hash: "
+                    "manifest={!r}, expected={!r}, staging_directory={!r}".format(
+                        manifest_cache_hash,
+                        hash_to_validate,
+                        cache_path,
+                    )
+                )
+            return CacheValidationResult(False, cache_path, manifest, reason)
     expected_files = manifest.get("expected_files", {})
     if not isinstance(expected_files, dict):
         return CacheValidationResult(False, cache_path, manifest, "expected_files is not a mapping")

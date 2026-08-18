@@ -160,7 +160,11 @@ def _build_cache_contents(
         "planned_playback_duration_sec": config.sweep_duration_sec,
     }
     manifest_path = write_manifest(cache_dir, manifest)
-    validation = validate_cache(cache_dir, require_checksums=False)
+    validation = validate_cache(
+        cache_dir,
+        require_checksums=False,
+        expected_cache_hash=cache_hash,
+    )
     if not validation.valid or validation.manifest is None or not _manifest_matches_config(
         validation.manifest,
         system_config,
@@ -258,6 +262,14 @@ def ensure_cache(
             compute_sha256=compute_sha256,
         )
         _replace_cache_directory(cache_dir, staging_dir)
+        final_validation = validate_cache(cache_dir, require_checksums=False)
+        if not final_validation.valid or final_validation.manifest is None or not _manifest_matches_config(
+            final_validation.manifest,
+            system_config,
+            config,
+        ):
+            reason = final_validation.reason or "manifest does not match the retinotopy render configuration"
+            raise RuntimeError(f"retinotopy final cache validation failed: {reason}")
         return RetinotopyCache(
             cache_hash=cache_dir.name,
             cache_dir=cache_dir,
