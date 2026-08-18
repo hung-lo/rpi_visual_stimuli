@@ -10,7 +10,7 @@ from rpi_visual_stimuli.core.preflight import (
     check_memory_before_loading,
     nearest_existing_ancestor,
     read_meminfo,
-    require_expected_mount,
+    validate_storage_root,
 )
 
 
@@ -89,13 +89,27 @@ class PreflightTests(unittest.TestCase):
             self.assertIn("Safety margin: 25", message)
             self.assertIn("Shortfall: 75 bytes", message)
 
-    def test_mount_check_accepts_active_mount(self):
-        with mock.patch.object(Path, "is_mount", return_value=True):
-            require_expected_mount(Path("/mnt/hd"))
+    def test_storage_validation_allows_non_mount_directory_by_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            storage_root = Path(directory)
+            with mock.patch("rpi_visual_stimuli.core.preflight._backing_mount_info", return_value={}):
+                with mock.patch.object(Path, "is_mount", return_value=False):
+                    with mock.patch("rpi_visual_stimuli.core.preflight.shutil.disk_usage") as fake_usage:
+                        fake_usage.return_value = (1000, 100, 900)
+                        result = validate_storage_root(storage_root)
+            self.assertFalse(result["is_mount_point"])
+            self.assertEqual(result["free_bytes"], 900)
 
-    def test_mount_check_rejects_unmounted_output_root(self):
-        with mock.patch.object(Path, "is_mount", return_value=False):
-            with self.assertRaises(RuntimeError) as context:
-                require_expected_mount(Path("/mnt/hd"))
+    def test_storage_validation_requires_mount_only_when_configured(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(Path, "is_mount", return_value=False):
+                with self.assertRaises(RuntimeError) as context:
+                    validate_storage_root(directory, require_separate_mount=True)
         self.assertIn("not an active mount point", str(context.exception))
-        self.assertIn("Mount the experiment drive and retry", str(context.exception))
+
+    def test_storage_validation_rejects_missing_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing"
+            with self.assertRaises(RuntimeError) as context:
+                validate_storage_root(missing)
+        self.assertIn("does not exist", str(context.exception))

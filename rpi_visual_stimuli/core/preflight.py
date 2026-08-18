@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import os
 from pathlib import Path
 import shutil
+import subprocess
 from typing import Iterable, Optional, Union
 
 
@@ -62,15 +64,76 @@ def nearest_existing_ancestor(path: Union[str, Path]) -> Path:
     return candidate
 
 
-def require_expected_mount(path: Union[str, Path]) -> None:
-    expected_mount = Path(path)
-    if expected_mount.is_mount():
-        return
-    raise RuntimeError(
-        "Configured output root {} is not an active mount point. "
-        "Refusing to build visual-stimulus cache on the system filesystem. "
-        "Mount the experiment drive and retry.".format(expected_mount)
-    )
+def _backing_mount_info(path: Path) -> dict[str, Optional[str]]:
+    try:
+        result = subprocess.run(
+            ["findmnt", "-T", str(path), "-o", "TARGET,SOURCE,FSTYPE", "-n"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {
+            "backing_mount": None,
+            "backing_device": None,
+            "filesystem_type": None,
+        }
+    fields = result.stdout.strip().split(None, 2)
+    if len(fields) != 3:
+        return {
+            "backing_mount": None,
+            "backing_device": None,
+            "filesystem_type": None,
+        }
+    return {
+        "backing_mount": fields[0],
+        "backing_device": fields[1],
+        "filesystem_type": fields[2],
+    }
+
+
+def validate_storage_root(
+    path: Union[str, Path],
+    *,
+    require_separate_mount: bool = False,
+) -> dict[str, object]:
+    storage_root = Path(path)
+    if not storage_root.exists():
+        raise RuntimeError(
+            "Configured output root does not exist: {}".format(storage_root)
+        )
+    if not storage_root.is_dir():
+        raise RuntimeError(
+            "Configured output root is not a directory: {}".format(storage_root)
+        )
+    if not os.access(str(storage_root), os.W_OK):
+        raise RuntimeError(
+            "Configured output root is not writable: {}".format(storage_root)
+        )
+
+    is_mount_point = storage_root.is_mount()
+    if require_separate_mount and not is_mount_point:
+        raise RuntimeError(
+            "Configured output root {} is not an active mount point. "
+            "A separate mounted storage root is required by configuration.".format(storage_root)
+        )
+
+    usage = shutil.disk_usage(str(storage_root))
+    total_bytes = usage.total if hasattr(usage, "total") else usage[0]
+    used_bytes = usage.used if hasattr(usage, "used") else usage[1]
+    free_bytes = usage.free if hasattr(usage, "free") else usage[2]
+    backing_mount = _backing_mount_info(storage_root)
+    return {
+        "path": str(storage_root),
+        "exists": True,
+        "writable": True,
+        "is_mount_point": is_mount_point,
+        "require_separate_mount": require_separate_mount,
+        "total_bytes": total_bytes,
+        "used_bytes": used_bytes,
+        "free_bytes": free_bytes,
+        **backing_mount,
+    }
 
 
 @dataclass(frozen=True)

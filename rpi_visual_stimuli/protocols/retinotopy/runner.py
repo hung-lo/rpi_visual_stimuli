@@ -38,7 +38,8 @@ from ...core.metadata import (
 from ...core.preflight import (
     check_disk_space_before_build,
     check_memory_before_loading,
-    require_expected_mount,
+    format_bytes,
+    validate_storage_root,
 )
 from ...core.progress import ProgressReporter
 from ...core.raw_cache import copy_manifest_to_session
@@ -570,7 +571,21 @@ def run(args: argparse.Namespace) -> int:
 
     peak_build_bytes = approximate_build_peak_bytes(system_config, config)
     rpg = import_rpg_or_raise()
-    require_expected_mount(system_config.output_root)
+    storage_check = validate_storage_root(
+        system_config.output_root,
+        require_separate_mount=system_config.storage.require_separate_mount,
+    )
+    if not storage_check["is_mount_point"]:
+        print(
+            "Storage root: {}\n"
+            "  Free space: {}\n"
+            "WARNING: {} is not a separate mount point. "
+            "Continuing because this deployment allows non-mounted storage roots.".format(
+                system_config.output_root,
+                format_bytes(int(storage_check["free_bytes"])),
+                system_config.output_root,
+            )
+        )
     check_disk_space_before_build(
         planned_cache_dir,
         required_bytes=peak_build_bytes,
@@ -609,6 +624,7 @@ def run(args: argparse.Namespace) -> int:
         cache=cache,
         preflight={
             "memory": memory_check.to_dict(),
+            "storage": storage_check,
             "disk_peak_required_bytes": peak_build_bytes,
             "camera_preflight": _serialize_camera_command_result(camera_preflight_result),
             "camera_preflight_note": camera_preflight_note,

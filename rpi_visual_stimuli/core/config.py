@@ -165,6 +165,16 @@ class CameraConfig:
 
 
 @dataclass(frozen=True)
+class StorageConfig:
+    require_separate_mount: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "require_separate_mount": self.require_separate_mount,
+        }
+
+
+@dataclass(frozen=True)
 class SystemConfig:
     output_root: Path
     cache_root: Path
@@ -172,6 +182,7 @@ class SystemConfig:
     photodiode: PhotodiodeConfig
     gpio: GPIOConfig
     camera: CameraConfig
+    storage: StorageConfig = StorageConfig()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -181,6 +192,7 @@ class SystemConfig:
             "photodiode": self.photodiode.to_dict(),
             "gpio": self.gpio.to_dict(),
             "camera": self.camera.to_dict(),
+            "storage": self.storage.to_dict(),
         }
 
 
@@ -294,6 +306,15 @@ def load_system_config(path: Union[str, Path]) -> SystemConfig:
     )
     _validate_camera(camera)
 
+    storage_payload = payload.get("storage", {})
+    storage_payload = _require_mapping(storage_payload, "storage")
+    storage = StorageConfig(
+        require_separate_mount=_require_bool(
+            storage_payload.get("require_separate_mount", False),
+            "storage.require_separate_mount",
+        )
+    )
+
     system = SystemConfig(
         output_root=Path(_require_path_string(payload.get("output_root"), "output_root")),
         cache_root=Path(_require_path_string(payload.get("cache_root"), "cache_root")),
@@ -301,6 +322,7 @@ def load_system_config(path: Union[str, Path]) -> SystemConfig:
         photodiode=photodiode,
         gpio=gpio,
         camera=camera,
+        storage=storage,
     )
     return system
 

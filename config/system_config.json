@@ -39,5 +39,8 @@
     "remote_video_root": "/home/pi/stim_logs",
     "framerate": 30,
     "default_prestim_baseline_minutes": 3.0
+  },
+  "storage": {
+    "require_separate_mount": false
   }
 }
