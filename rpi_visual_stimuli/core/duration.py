@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Iterable, Optional
+from typing import Dict, Iterable, Optional
 
 
 @dataclass(frozen=True)
@@ -11,7 +11,7 @@ class ProtocolDurationSummary:
     no_camera_protocol_sec: float
     camera_start_to_protocol_end_nominal_sec: Optional[float]
 
-    def to_dict(self) -> dict[str, float | None]:
+    def to_dict(self) -> Dict[str, Optional[float]]:
         return {
             "trial_sequence_sec": self.trial_sequence_sec,
             "no_camera_protocol_sec": self.no_camera_protocol_sec,
@@ -56,7 +56,7 @@ def summarize_protocol_duration(
 def estimated_local_completion(
     remaining_seconds: float,
     *,
-    now: datetime | None = None,
+    now: Optional[datetime] = None,
 ) -> datetime:
     current = now or datetime.now().astimezone()
     return current + timedelta(seconds=max(0.0, remaining_seconds))

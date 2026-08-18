@@ -5,21 +5,13 @@ import hashlib
 import os
 from pathlib import Path
 import tempfile
-from typing import Iterable, Optional, Protocol, Union
+from typing import Callable, Iterable, Optional, Union
 
 
-class ConvertRawFn(Protocol):
-    def __call__(
-        self,
-        source_rgb_path: str,
-        converted_raw_path: str,
-        source_frame_count: int,
-        screen_width_px: int,
-        screen_height_px: int,
-        refreshes_per_source_frame: int,
-        screen_colormode: int,
-    ) -> object:
-        ...
+ConvertRawFn = Callable[
+    [str, str, int, int, int, int, int],
+    object,
+]
 
 
 @dataclass(frozen=True)

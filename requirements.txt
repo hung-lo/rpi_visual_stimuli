@@ -1,3 +1,5 @@
-numpy
-Pillow
+numpy<1.22; python_version < "3.8"
+numpy; python_version >= "3.8"
+Pillow<10; python_version < "3.8"
+Pillow; python_version >= "3.8"
 RPi.GPIO; platform_machine == "armv7l" or platform_machine == "aarch64"
