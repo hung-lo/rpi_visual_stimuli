@@ -43,7 +43,13 @@ from ...core.preflight import (
 )
 from ...core.progress import ProgressReporter
 from ...core.raw_cache import copy_manifest_to_session
-from ...core.rpg_display import display_raw_with_timing, import_rpg_or_raise, load_raws, open_screen
+from ...core.rpg_display import (
+    diagnose_rpg_display_return,
+    display_raw_with_timing,
+    import_rpg_or_raise,
+    load_raws,
+    open_screen,
+)
 from ...core.session import build_session_context, create_session_directories
 from ...core.timestamps import utc_iso_now
 from .cache import (
@@ -69,7 +75,13 @@ CAMERA_SETTLING_SEC = 2.0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    return build_common_parser("Run the retinotopic mapping protocol.")
+    parser = build_common_parser("Run the retinotopic mapping protocol.")
+    parser.add_argument(
+        "--test-rpg-return",
+        action="store_true",
+        help="Display one cached sweep and print the RPG return-value timing diagnostic.",
+    )
+    return parser
 
 
 def _prompt_protocol_config(system_config: SystemConfig, *, test_mode: bool):
@@ -180,6 +192,21 @@ def _format_command(command: tuple[str, ...]) -> str:
 
 def _format_duration_with_seconds(seconds: float) -> str:
     return f"{format_duration(seconds)} ({seconds:.1f} sec)"
+
+
+def _resolve_cleanup_stage(
+    *,
+    screen_opened: bool,
+    gpio_cleanup_attempted: bool,
+    camera_cleanup_attempted: bool,
+) -> Optional[str]:
+    if camera_cleanup_attempted:
+        return "camera_cleanup"
+    if gpio_cleanup_attempted:
+        return "gpio_cleanup"
+    if screen_opened:
+        return "rpg_cleanup"
+    return None
 
 
 def _remaining_suffix_sums(epoch_durations_sec: list[float]) -> list[float]:
@@ -592,6 +619,12 @@ def run(args: argparse.Namespace) -> int:
         margin_bytes=1024 * 1024 * 1024,
     )
     cache = ensure_cache(system_config, config, convert_raw_fn=rpg.convert_raw)
+    if args.test_rpg_return:
+        first_direction = config.enabled_directions[0]
+        with open_screen(system_config) as screen:
+            loaded_raw = screen.load_raw(str(cache.sweep_paths[first_direction]))
+            diagnose_rpg_display_return(screen, loaded_raw)
+        return 0
     if args.build_cache_only:
         print(f"Cache built: {cache.cache_dir}")
         print(f"Manifest: {cache.manifest_path}")
@@ -657,6 +690,7 @@ def run(args: argparse.Namespace) -> int:
     raw_loading_duration_sec = None
     camera_left_running = False
     gpio_controller = None
+    screen_opened = False
     progress_reporter = None
     try:
         baseline_gray = get_baseline_gray_raw(cache.cache_dir, system_config, convert_raw_fn=rpg.convert_raw)
@@ -677,6 +711,7 @@ def run(args: argparse.Namespace) -> int:
             convert_raw_fn=rpg.convert_raw,
         )
         with open_screen(system_config) as screen:
+            screen_opened = True
             loaded_sweeps = {}
             gpio_controller = setup_gpio(system_config.gpio)
             if gpio_controller is not None:
@@ -892,15 +927,21 @@ def run(args: argparse.Namespace) -> int:
         if progress_reporter is not None:
             progress_reporter.finish()
         baseline_core.stop_early_start_monitor(baseline_monitor)
-        cleanup_stage = "gpio_cleanup"
+        gpio_cleanup_attempted = gpio_controller is not None
+        gpio_cleanup_succeeded = None
+        gpio_cleanup_error = None
         if gpio_controller is not None:
             try:
                 gpio_controller.drive_low()
                 gpio_controller.cleanup()
+                gpio_cleanup_succeeded = True
             except Exception as exc:
-                cleanup_error = f"{type(exc).__name__}: {exc}"
-        cleanup_stage = "camera_cleanup"
+                gpio_cleanup_error = f"{type(exc).__name__}: {exc}"
+                if cleanup_error is None:
+                    cleanup_error = gpio_cleanup_error
+        camera_cleanup_attempted = False
         if camera_started:
+            camera_cleanup_attempted = True
             if prompt_yes_no("Stop camera recording and fetch files now?", default_yes=True):
                 camera_cleanup_result = camera_core.stop_and_fetch_camera(
                     system_config.camera,
@@ -919,6 +960,11 @@ def run(args: argparse.Namespace) -> int:
                 )
                 print("Camera left running. Manual cleanup:")
                 print(camera_core.manual_stop_fetch_command(repo_root))
+        cleanup_stage = _resolve_cleanup_stage(
+            screen_opened=screen_opened,
+            gpio_cleanup_attempted=gpio_cleanup_attempted,
+            camera_cleanup_attempted=camera_cleanup_attempted,
+        )
         update_session_metadata(
             session.metadata_path,
             session_completed=session_completed,
@@ -927,6 +973,24 @@ def run(args: argparse.Namespace) -> int:
             failure_summary=None if session_completed else failure_summary,
             cleanup_stage=cleanup_stage,
             cleanup_error=cleanup_error,
+            cleanup={
+                "rpg": {"attempted": screen_opened, "succeeded": True if screen_opened else None, "error": None},
+                "gpio": {
+                    "attempted": gpio_cleanup_attempted,
+                    "succeeded": gpio_cleanup_succeeded,
+                    "error": gpio_cleanup_error,
+                },
+                "camera": {
+                    "applicable": camera_enabled,
+                    "attempted": camera_cleanup_attempted,
+                    "succeeded": (
+                        None
+                        if camera_cleanup_result is None
+                        else not camera_cleanup_result.left_running and not bool(camera_cleanup_result.cleanup_error)
+                    ),
+                    "error": None if camera_cleanup_result is None else camera_cleanup_result.cleanup_error,
+                },
+            },
             end_utc=utc_iso_now(),
             camera_state={
                 **initial_metadata["camera_state"],

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import time
+from collections.abc import Mapping
 from typing import Any, Optional, Union
 
 from .config import SystemConfig
@@ -58,22 +59,79 @@ class DisplayTiming:
         }
 
 
-def extract_rpg_performance(perf: Any) -> dict[str, Optional[float]]:
-    if perf is None:
-        return {
-            "start_time_unix": None,
-            "mean_interframe_us": None,
-            "stddev_interframe_us": None,
-        }
-    if isinstance(perf, dict):
-        getter = perf.get
-    else:
-        getter = lambda name: getattr(perf, name, None)
+def _empty_rpg_performance() -> dict[str, Optional[float]]:
     return {
-        "start_time_unix": getter("start_time_unix"),
-        "mean_interframe_us": getter("mean_interframe_us"),
-        "stddev_interframe_us": getter("stddev_interframe_us"),
+        "start_time_unix": None,
+        "mean_interframe_us": None,
+        "stddev_interframe_us": None,
     }
+
+
+def _coerce_metric(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def extract_rpg_performance(perf: Any, *, diagnostic: bool = False) -> dict[str, Optional[float]]:
+    if perf is None:
+        return _empty_rpg_performance()
+
+    if isinstance(perf, Mapping):
+        values = dict(perf)
+    else:
+        values = {}
+        for name in dir(perf):
+            if name.startswith("_"):
+                continue
+            try:
+                values[name] = getattr(perf, name)
+            except Exception:
+                continue
+
+    normalized = {
+        str(key).lower().replace("-", "_").replace(" ", "_"): value
+        for key, value in values.items()
+    }
+    aliases = {
+        "start_time_unix": ("start_time_unix", "start_time", "start_unix"),
+        "mean_interframe_us": (
+            "mean_interframe_us",
+            "mean_interframe",
+            "mean_interframe_time_us",
+        ),
+        "stddev_interframe_us": (
+            "stddev_interframe_us",
+            "stddev_interframe",
+            "std_interframe_us",
+            "std_interframe",
+        ),
+    }
+    result = _empty_rpg_performance()
+    for output_name, candidate_names in aliases.items():
+        for candidate_name in candidate_names:
+            if candidate_name in normalized:
+                result[output_name] = _coerce_metric(normalized[candidate_name])
+                break
+    if diagnostic:
+        print("RPG display_raw return type: {}".format(type(perf)))
+        representation = repr(perf)
+        if len(representation) > 2000:
+            representation = representation[:2000] + "..."
+        print("RPG display_raw return repr: {}".format(representation))
+        print("available timing fields:")
+        for name in aliases:
+            print("  {} = {}".format(name, result[name]))
+    return result
+
+
+def diagnose_rpg_display_return(screen: Any, loaded_raw: Any) -> dict[str, Optional[float]]:
+    """Display one raw and print the bounded RPG return-value diagnostic."""
+    perf = screen.display_raw(loaded_raw)
+    return extract_rpg_performance(perf, diagnostic=True)
 
 
 def display_raw_with_timing(screen: Any, loaded_raw: Any) -> DisplayTiming:

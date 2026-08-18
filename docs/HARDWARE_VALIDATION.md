@@ -30,10 +30,12 @@ Follow these stages in order before animal use.
 
 ## Stage D: RPG Timing
 
+- If RPG timing fields are blank, run `python3 run_retinotopy.py --test --no-camera --test-rpg-return` and compare the reported return shape with the deployed Box RPG installation.
 - Confirm mean interframe duration is near `16666.7 us` at 60 Hz.
 - Confirm the standard deviation is low.
 - Confirm `display_raw()` call duration is close to the planned raw duration.
 - Confirm playback looks smooth and free of obvious judder.
+- Treat the photodiode trace as physical display timing; software request/return timestamps and RPG metrics are diagnostic timing references.
 
 ## Stage E: Photodiode Recording
 
