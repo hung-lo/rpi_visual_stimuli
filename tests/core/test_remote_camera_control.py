@@ -104,6 +104,56 @@ class RemoteCameraControlTests(unittest.TestCase):
         self.assertEqual(ctx.exception.exit_code, 3)
         self.assertIn("session-abc", str(ctx.exception))
 
+    def test_query_remote_acquisition_forwards_command_timeout(self):
+        completed = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with patch.object(remote_camera_control, "run_ssh", return_value=completed) as run_ssh:
+            result = remote_camera_control._query_remote_acquisition(
+                "pi@test-camera", "/repo/start.py", batch_mode=True,
+                connect_timeout=5, command_timeout_sec=10,
+            )
+        kwargs = run_ssh.call_args.kwargs
+        self.assertTrue(kwargs["batch_mode"])
+        self.assertEqual(kwargs["connect_timeout"], 5)
+        self.assertEqual(kwargs["command_timeout_sec"], 10)
+        self.assertTrue(kwargs["quiet"])
+        self.assertFalse(kwargs["check"])
+        self.assertFalse(result["running"])
+        self.assertEqual(result["lines"], [])
+
+    def test_query_remote_acquisition_detects_running_process(self):
+        completed = SimpleNamespace(returncode=0, stdout="1234 python3 /repo/start.py\n", stderr="")
+        with patch.object(remote_camera_control, "run_ssh", return_value=completed):
+            result = remote_camera_control._query_remote_acquisition(
+                "pi@test-camera", "/repo/start.py", command_timeout_sec=10
+            )
+        self.assertTrue(result["running"])
+        self.assertEqual(result["lines"], ["1234 python3 /repo/start.py"])
+
+    def test_preflight_query_path_accepts_command_timeout(self):
+        args = SimpleNamespace(
+            camera_host="pi@test-camera", remote_camera_repo="/repo",
+            remote_camera_start="/repo/start.py", remote_camera_stop="/repo/stop.sh",
+            remote_video_root="/remote/videos", local_output_root="/tmp/output",
+            dry_run=False, allow_legacy_state=False,
+        )
+        def ssh_result(_host, remote_cmd, **_kwargs):
+            if remote_cmd == "echo camera_connection_ok":
+                stdout = "camera_connection_ok"
+            elif "remote_preflight_ok" in remote_cmd:
+                stdout = "remote_preflight_ok"
+            else:
+                stdout = ""
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+        with patch.object(remote_camera_control, "_command_available", return_value={"ok": True}), \
+             patch.object(remote_camera_control, "_check_local_writable"), \
+             patch.object(remote_camera_control, "_check_state_file_parent_writable"), \
+             patch.object(remote_camera_control, "run_ssh", side_effect=ssh_result), \
+             patch.object(remote_camera_control, "load_state", side_effect=remote_camera_control.CameraControlError("none")):
+            result = remote_camera_control._run_preflight_checks(args)
+        self.assertFalse(result["acquisition_running"])
+        self.assertEqual(result["acquisition_lines"], [])
+
     def test_load_state_prefers_namespaced_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             state_path = Path(temp_dir) / ".rpi_visual_stimuli_camera_session.json"

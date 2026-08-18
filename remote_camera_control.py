@@ -385,6 +385,7 @@ def _query_remote_acquisition(
     dry_run: bool = False,
     batch_mode: bool = False,
     connect_timeout: Optional[int] = None,
+    command_timeout_sec: Optional[float] = SSH_COMMAND_TIMEOUT_SEC,
 ) -> dict[str, object]:
     pattern = acquisition_pattern(remote_start_path)
     result = run_ssh(
@@ -394,6 +395,7 @@ def _query_remote_acquisition(
         dry_run=dry_run,
         batch_mode=batch_mode,
         connect_timeout=connect_timeout,
+        command_timeout_sec=command_timeout_sec,
         quiet=True,
     )
     lines = [line for line in result.stdout.splitlines() if line.strip()]
