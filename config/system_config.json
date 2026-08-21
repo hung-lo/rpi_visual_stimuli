@@ -2,13 +2,13 @@
   "output_root": "/mnt/hd",
   "cache_root": "/mnt/hd/vstim_cache",
   "screen": {
-    "width_px": 1024,
-    "height_px": 600,
+    "width_px": 1280,
+    "height_px": 720,
     "refresh_rate_hz": 60,
     "colormode": 16,
     "background_gray_u8": 127,
-    "visible_width_cm": 53.1456,
-    "visible_height_cm": 29.8944
+    "visible_width_cm": 15.50,
+    "visible_height_cm": 8.72
   },
   "photodiode": {
     "enabled": true,
@@ -42,5 +42,15 @@
   },
   "storage": {
     "require_separate_mount": false
+  },
+  "viewer_geometry": {
+    "screen_model": "Desview OL7",
+    "eye_screen_distance_cm": 16.0,
+    "screen_center_azimuth_deg": 0.0,
+    "screen_center_elevation_deg": 0.0,
+    "screen_yaw_deg": 0.0,
+    "screen_pitch_deg": 0.0,
+    "screen_roll_deg": 0.0,
+    "geometry_source": "assumed_centered_orthogonal"
   }
 }

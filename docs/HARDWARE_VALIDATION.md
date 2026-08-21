@@ -4,6 +4,8 @@ Follow these stages in order before animal use.
 
 ## Stage A: Gray And Photodiode Baseline
 
+- Confirm the Desview OL7 is driven through the 1280 x 720 stimulus framebuffer at 60 Hz.
+- Record the active calibration as 15.50 cm x 8.72 cm and the approximate eye-to-screen-center distance as 16.0 cm. Center, azimuth, elevation, yaw, pitch, and roll are assumed zero rather than independently measured.
 - Open the RPG screen.
 - Display a one-frame gray raw with a black photodiode patch.
 - Leave the process idle.
@@ -12,6 +14,7 @@ Follow these stages in order before animal use.
 
 ## Stage B: Retinotopy Geometry
 
+- Use flat-screen geometry for downstream visual-angle analysis; do not bake the approximate 51.7 x 30.5 degree coverage into the renderer.
 - Run `python3 run_retinotopy.py --test --no-camera`.
 - Verify left/right sweeps use vertical bands.
 - Verify top/bottom sweeps use horizontal bands.

@@ -17,7 +17,7 @@ class DriftingGratingStimulusTests(unittest.TestCase):
         config = build_config(system_config)
         frame0 = generate_grating_frame(system_config, config, bar_orientation_deg=0.0, frame_index=0)
         frame90 = generate_grating_frame(system_config, config, bar_orientation_deg=90.0, frame_index=0)
-        self.assertEqual(frame0.shape, (600, 1024, 3))
+        self.assertEqual(frame0.shape, (720, 1280, 3))
         self.assertEqual(frame0.dtype.name, "uint8")
         self.assertEqual(drift_direction_deg(0.0), 270.0)
         self.assertEqual(drift_direction_deg(90.0), 0.0)

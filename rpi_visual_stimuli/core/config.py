@@ -175,6 +175,30 @@ class StorageConfig:
 
 
 @dataclass(frozen=True)
+class ViewerGeometryConfig:
+    screen_model: str = "Desview OL7"
+    eye_screen_distance_cm: float = 16.0
+    screen_center_azimuth_deg: float = 0.0
+    screen_center_elevation_deg: float = 0.0
+    screen_yaw_deg: float = 0.0
+    screen_pitch_deg: float = 0.0
+    screen_roll_deg: float = 0.0
+    geometry_source: str = "assumed_centered_orthogonal"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "screen_model": self.screen_model,
+            "eye_screen_distance_cm": self.eye_screen_distance_cm,
+            "screen_center_azimuth_deg": self.screen_center_azimuth_deg,
+            "screen_center_elevation_deg": self.screen_center_elevation_deg,
+            "screen_yaw_deg": self.screen_yaw_deg,
+            "screen_pitch_deg": self.screen_pitch_deg,
+            "screen_roll_deg": self.screen_roll_deg,
+            "geometry_source": self.geometry_source,
+        }
+
+
+@dataclass(frozen=True)
 class SystemConfig:
     output_root: Path
     cache_root: Path
@@ -183,6 +207,7 @@ class SystemConfig:
     gpio: GPIOConfig
     camera: CameraConfig
     storage: StorageConfig = StorageConfig()
+    viewer_geometry: ViewerGeometryConfig = ViewerGeometryConfig()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -193,6 +218,7 @@ class SystemConfig:
             "gpio": self.gpio.to_dict(),
             "camera": self.camera.to_dict(),
             "storage": self.storage.to_dict(),
+            "viewer_geometry": self.viewer_geometry.to_dict(),
         }
 
 
@@ -315,6 +341,46 @@ def load_system_config(path: Union[str, Path]) -> SystemConfig:
         )
     )
 
+    viewer_geometry_payload = _require_mapping(
+        payload.get("viewer_geometry", {}),
+        "viewer_geometry",
+    )
+    viewer_geometry = ViewerGeometryConfig(
+        screen_model=_require_path_string(
+            viewer_geometry_payload.get("screen_model", "Desview OL7"),
+            "viewer_geometry.screen_model",
+        ),
+        eye_screen_distance_cm=_require_float(
+            viewer_geometry_payload.get("eye_screen_distance_cm", 16.0),
+            "viewer_geometry.eye_screen_distance_cm",
+            greater_than=0.0,
+        ),
+        screen_center_azimuth_deg=_require_float(
+            viewer_geometry_payload.get("screen_center_azimuth_deg", 0.0),
+            "viewer_geometry.screen_center_azimuth_deg",
+        ),
+        screen_center_elevation_deg=_require_float(
+            viewer_geometry_payload.get("screen_center_elevation_deg", 0.0),
+            "viewer_geometry.screen_center_elevation_deg",
+        ),
+        screen_yaw_deg=_require_float(
+            viewer_geometry_payload.get("screen_yaw_deg", 0.0),
+            "viewer_geometry.screen_yaw_deg",
+        ),
+        screen_pitch_deg=_require_float(
+            viewer_geometry_payload.get("screen_pitch_deg", 0.0),
+            "viewer_geometry.screen_pitch_deg",
+        ),
+        screen_roll_deg=_require_float(
+            viewer_geometry_payload.get("screen_roll_deg", 0.0),
+            "viewer_geometry.screen_roll_deg",
+        ),
+        geometry_source=_require_path_string(
+            viewer_geometry_payload.get("geometry_source", "assumed_centered_orthogonal"),
+            "viewer_geometry.geometry_source",
+        ),
+    )
+
     system = SystemConfig(
         output_root=Path(_require_path_string(payload.get("output_root"), "output_root")),
         cache_root=Path(_require_path_string(payload.get("cache_root"), "cache_root")),
@@ -323,6 +389,7 @@ def load_system_config(path: Union[str, Path]) -> SystemConfig:
         gpio=gpio,
         camera=camera,
         storage=storage,
+        viewer_geometry=viewer_geometry,
     )
     return system
 

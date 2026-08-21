@@ -8,7 +8,7 @@ Headless Raspberry Pi visual-stimulus protocols for:
 The repository preserves the laboratory framebuffer workflow:
 
 - direct `rpg` presentation without X11, pygame, PsychoPy, or OpenCV windows
-- 1024 x 600 framebuffer at configured 60 Hz
+- 1280 x 720 framebuffer at configured 60 Hz
 - 16-bit RPG output
 - white photodiode patch during stimuli and black patch during gray
 - software request and return timestamps around `screen.display_raw()`
@@ -45,7 +45,9 @@ Install the SjulsonLab `rpg` package separately on the Raspberry Pi. It is inten
 
 Shared hardware settings live in `config/system_config.json`.
 
-The screen physical dimensions there are provisional calibration defaults. Measure the visible width and height of the actual monitor before using spatial-frequency values in cycles/cm for drifting gratings.
+The current physical calibration is for the Desview OL7 active area: 15.50 cm wide by 8.72 cm high. The approximate eye-to-screen-center distance is 16.0 cm. Viewer orientation is assumed centered and orthogonal, not independently measured.
+
+The 1280 x 720 framebuffer preserves the OL7 16:9 aspect ratio at 60 Hz while keeping raw-file and RAM requirements substantially below 1920 x 1080. The approximate full-screen coverage under the assumed geometry is 51.7 degrees horizontally by 30.5 degrees vertically, or about -25.8 to +25.8 degrees azimuth and -15.3 to +15.3 degrees elevation. These are analysis estimates, not renderer limits.
 
 You can override the configuration path with:
 
@@ -152,6 +154,8 @@ If the configured persistent cache root is not writable on a development machine
 `--build-cache-only` builds and validates the persistent cache without opening the screen.
 
 `--dry-run` validates prompts, sequence planning, and intended commands without hardware side effects.
+
+Retinotopy visual-angle analysis should use flat-screen geometry, for example `atan(offset / eye_screen_distance)`, rather than assuming one constant degrees-per-pixel value across the entire screen. The geometry assumptions are stored in each session's resolved system configuration.
 
 For Box hardware RPG investigation, both protocols support `--test-rpg-return`. Use `python3 run_retinotopy.py --test --no-camera --test-rpg-return` or `python3 run_drifting_gratings.py --test --no-camera --test-rpg-return` to display one cached raw and print the bounded `display_raw()` return type, representation, and recognized timing fields. The drifting-gratings diagnostic automatically uses test-mode parameters, avoids session creation, and rejects `--camera`. These are hardware diagnostics and are not part of normal CI.
 

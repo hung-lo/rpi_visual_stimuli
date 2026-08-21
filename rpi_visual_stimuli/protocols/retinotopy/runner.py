@@ -299,6 +299,14 @@ def _initial_metadata(
         "session_identifiers": session.to_dict(),
         "system_configuration": system_config.to_dict(),
         "protocol_configuration": config.to_dict(),
+        "viewer_geometry": {
+            **system_config.viewer_geometry.to_dict(),
+            "visible_width_cm": system_config.screen.visible_width_cm,
+            "visible_height_cm": system_config.screen.visible_height_cm,
+            "width_px": system_config.screen.width_px,
+            "height_px": system_config.screen.height_px,
+            "refresh_rate_hz": system_config.screen.refresh_rate_hz,
+        },
         "camera_state": {
             "enabled": camera_enabled,
             "requested_enabled": camera_requested,

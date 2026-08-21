@@ -33,7 +33,7 @@ The repository includes previews and tests that explicitly check the 0-degree an
 
 Spatial frequency in cycles/cm is meaningful only after the visible monitor width and height in `config/system_config.json` have been measured on the actual display.
 
-The default calibration values are provisional laboratory placeholders.
+The active-area calibration for the Desview OL7 is 15.50 cm wide by 8.72 cm high. The stimulus framebuffer is 1280 x 720 at 60 Hz, preserving the panel's 16:9 aspect ratio while keeping raw and RAM costs below 1920 x 1080. The approximate eye-to-screen-center distance is 16.0 cm; viewer centering and orientation values are assumptions stored in session metadata.
 
 ## Spatial Frequency, Temporal Frequency, And Contrast
 
